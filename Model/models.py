@@ -38,7 +38,7 @@ class File(db.Model):
     original_name = db.Column(db.String(255), nullable=False)
     enc_file_path = db.Column(db.String(255))
     state = db.Column(db.String(20), default='Unencrypted')
-
+    # adaugam si un hash
 
 class Performance(db.Model):
     __tablename__ = 'performances'
