@@ -21,7 +21,7 @@ class OpenSSLService:
         start_time = time.time()
 
         try:
-            result = subprocess.run(command, capture_output=True, text=True, check=True)
+            subprocess.run(command, capture_output=True, text=True, check=True)
         except subprocess.CalledProcessError as e:
             print(f"[Error] OpenSSL: {e.stderr}")
             return -1
