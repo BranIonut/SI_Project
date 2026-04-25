@@ -1,0 +1,62 @@
+from Model.models import CryptoOperation, db, utc_now
+
+
+class OperationRepository:
+    @staticmethod
+    def create(
+        file_id,
+        algorithm_id,
+        framework_id,
+        key_id,
+        operation_type,
+        status,
+        error_message=None,
+        notes=None,
+        started_at=None,
+        finished_at=None,
+    ):
+        operation = CryptoOperation(
+            file_id=file_id,
+            algorithm_id=algorithm_id,
+            framework_id=framework_id,
+            key_id=key_id,
+            operation_type=operation_type,
+            status=status,
+            error_message=error_message,
+            notes=notes,
+            started_at=started_at or utc_now(),
+            finished_at=finished_at,
+        )
+        db.session.add(operation)
+        db.session.commit()
+        return operation
+
+    @staticmethod
+    def get_by_id(operation_id):
+        return db.session.get(CryptoOperation, operation_id)
+
+    @staticmethod
+    def get_all():
+        return CryptoOperation.query.order_by(CryptoOperation.started_at.desc()).all()
+
+    @staticmethod
+    def update(operation_id, **kwargs):
+        operation = db.session.get(CryptoOperation, operation_id)
+        if not operation:
+            return None
+        for field, value in kwargs.items():
+            if hasattr(operation, field):
+                setattr(operation, field, value)
+        if operation.finished_at is None and kwargs.get("status") in {"success", "failed"}:
+            operation.finished_at = utc_now()
+        db.session.commit()
+        return operation
+
+    @staticmethod
+    def delete(operation_id):
+        operation = db.session.get(CryptoOperation, operation_id)
+        if not operation:
+            return False
+        db.session.delete(operation)
+        db.session.commit()
+        return True
