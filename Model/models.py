@@ -136,14 +136,19 @@ def seed_defaults():
         open_ssl = Framework(name="OpenSSL", type="CLI / subprocess", version=None)
         db.session.add(open_ssl)
 
-    cryptography_fw = Framework.query.filter_by(name="Cryptography").first()
-    if not cryptography_fw:
-        cryptography_fw = Framework(
-            name="Cryptography",
-            type="Python library",
+    old_framework = Framework.query.filter_by(name="Cryptography").first()
+    custom_fw = Framework.query.filter_by(name="Custom").first()
+    if old_framework and not custom_fw:
+        old_framework.name = "Custom"
+        old_framework.type = "Custom Python implementation"
+        old_framework.version = None
+    elif not custom_fw:
+        custom_fw = Framework(
+            name="Custom",
+            type="Custom Python implementation",
             version=None,
         )
-        db.session.add(cryptography_fw)
+        db.session.add(custom_fw)
 
     db.session.flush()
 
@@ -154,6 +159,13 @@ def seed_defaults():
             "mode": "CBC",
             "key_size": 256,
             "description": "AES file encryption for normal local files.",
+        },
+        {
+            "name": "DES-CBC",
+            "type": "symmetric",
+            "mode": "CBC",
+            "key_size": 64,
+            "description": "DES educational file encryption for course comparison.",
         },
         {
             "name": "RSA-2048",

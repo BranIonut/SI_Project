@@ -7,22 +7,14 @@ import shutil
 import subprocess
 import time
 import tracemalloc
-from typing import Any
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 try:
     import psutil
 except ImportError:  # pragma: no cover - optional fallback
     psutil = None
-
-try:
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import padding, rsa
-    from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-    from cryptography.hazmat.primitives.padding import PKCS7
-except ImportError:  # pragma: no cover - handled at runtime
-    hashes = serialization = padding = rsa = Cipher = algorithms = modes = PKCS7 = None
 
 from Model.models import BASE_DIR, utc_now
 from Repositories.file_repo import FileRepository
@@ -108,8 +100,8 @@ class OpenSSLService:
             raise CryptoServiceError(error_message) from exc
 
     @staticmethod
-    def generate_aes_key():
-        return secrets.token_bytes(32)
+    def generate_symmetric_key(size_bytes):
+        return secrets.token_bytes(size_bytes)
 
     @classmethod
     def generate_rsa_key_pair(cls, private_path, public_path):
@@ -122,16 +114,38 @@ class OpenSSLService:
         return public_pem, private_pem
 
     @classmethod
-    def encrypt_aes_256_cbc(cls, input_path, output_path, key_bytes):
+    def _encrypt_block_cipher(cls, cipher_name, input_path, output_path, key_bytes, iv_size, extra_args=None):
         key_hex = binascii.hexlify(key_bytes).decode("utf-8")
-        iv_bytes = secrets.token_bytes(16)
+        iv_bytes = secrets.token_bytes(iv_size)
         iv_hex = binascii.hexlify(iv_bytes).decode("utf-8")
+        command = ["enc", f"-{cipher_name}", "-in", input_path, "-out", output_path, "-K", key_hex, "-iv", iv_hex]
+        if extra_args:
+            command.extend(extra_args)
         cls.run_command(
-            [
+            command
+        )
+        with open(output_path, "rb") as encrypted_file:
+            payload = encrypted_file.read()
+        with open(output_path, "wb") as encrypted_file:
+            encrypted_file.write(iv_bytes + payload)
+
+    @classmethod
+    def _decrypt_block_cipher(cls, cipher_name, input_path, output_path, key_bytes, iv_size, extra_args=None):
+        with open(input_path, "rb") as encrypted_file:
+            iv_bytes = encrypted_file.read(iv_size)
+            payload = encrypted_file.read()
+        temp_payload_path = f"{output_path}.openssl.tmp"
+        with open(temp_payload_path, "wb") as temp_payload:
+            temp_payload.write(payload)
+        try:
+            key_hex = binascii.hexlify(key_bytes).decode("utf-8")
+            iv_hex = binascii.hexlify(iv_bytes).decode("utf-8")
+            command = [
                 "enc",
-                "-aes-256-cbc",
+                "-d",
+                f"-{cipher_name}",
                 "-in",
-                input_path,
+                temp_payload_path,
                 "-out",
                 output_path,
                 "-K",
@@ -139,46 +153,48 @@ class OpenSSLService:
                 "-iv",
                 iv_hex,
             ]
-        )
-        with open(output_path, "rb") as encrypted_file:
-            encrypted_payload = encrypted_file.read()
-        with open(output_path, "wb") as encrypted_file:
-            encrypted_file.write(iv_bytes + encrypted_payload)
-
-    @classmethod
-    def decrypt_aes_256_cbc(cls, input_path, output_path, key_bytes):
-        with open(input_path, "rb") as encrypted_file:
-            iv_bytes = encrypted_file.read(16)
-            encrypted_payload = encrypted_file.read()
-        temp_payload_path = f"{output_path}.openssl.tmp"
-        with open(temp_payload_path, "wb") as temp_payload:
-            temp_payload.write(encrypted_payload)
-        try:
-            key_hex = binascii.hexlify(key_bytes).decode("utf-8")
-            iv_hex = binascii.hexlify(iv_bytes).decode("utf-8")
+            if extra_args:
+                command.extend(extra_args)
             cls.run_command(
-                [
-                    "enc",
-                    "-d",
-                    "-aes-256-cbc",
-                    "-in",
-                    temp_payload_path,
-                    "-out",
-                    output_path,
-                    "-K",
-                    key_hex,
-                    "-iv",
-                    iv_hex,
-                ]
+                command
             )
         finally:
             if os.path.exists(temp_payload_path):
                 os.remove(temp_payload_path)
 
     @classmethod
+    def encrypt_aes_256_cbc(cls, input_path, output_path, key_bytes):
+        cls._encrypt_block_cipher("aes-256-cbc", input_path, output_path, key_bytes, 16)
+
+    @classmethod
+    def decrypt_aes_256_cbc(cls, input_path, output_path, key_bytes):
+        cls._decrypt_block_cipher("aes-256-cbc", input_path, output_path, key_bytes, 16)
+
+    @classmethod
+    def encrypt_des_cbc(cls, input_path, output_path, key_bytes):
+        cls._encrypt_block_cipher(
+            "des-cbc",
+            input_path,
+            output_path,
+            key_bytes,
+            8,
+            extra_args=["-provider", "default", "-provider", "legacy"],
+        )
+
+    @classmethod
+    def decrypt_des_cbc(cls, input_path, output_path, key_bytes):
+        cls._decrypt_block_cipher(
+            "des-cbc",
+            input_path,
+            output_path,
+            key_bytes,
+            8,
+            extra_args=["-provider", "default", "-provider", "legacy"],
+        )
+
+    @classmethod
     def encrypt_rsa_2048(cls, input_path, output_path, public_key_path):
-        input_size = os.path.getsize(input_path)
-        if input_size > cls.MAX_RSA_INPUT_BYTES:
+        if os.path.getsize(input_path) > cls.MAX_RSA_INPUT_BYTES:
             raise CryptoServiceError(
                 "RSA is only used for small demo files or key encryption. Use AES for normal file encryption."
             )
@@ -199,75 +215,111 @@ class OpenSSLService:
     @classmethod
     def decrypt_rsa_2048(cls, input_path, output_path, private_key_path):
         cls.run_command(
-            [
-                "pkeyutl",
-                "-decrypt",
-                "-inkey",
-                private_key_path,
-                "-in",
-                input_path,
-                "-out",
-                output_path,
-            ]
+            ["pkeyutl", "-decrypt", "-inkey", private_key_path, "-in", input_path, "-out", output_path]
         )
 
 
-class CryptographyService:
+class CustomPythonService:
     @staticmethod
-    def _require_dependency():
-        if Cipher is None:
-            raise CryptoServiceError(
-                "The 'cryptography' package is not installed. Install dependencies first."
-            )
+    def generate_symmetric_key(size_bytes):
+        return secrets.token_bytes(size_bytes)
+
+    @staticmethod
+    def _xor_bytes(left, right):
+        return bytes(a ^ b for a, b in zip(left, right))
+
+    @staticmethod
+    def _pkcs7_pad(data, block_size):
+        padding_size = block_size - (len(data) % block_size)
+        return data + bytes([padding_size]) * padding_size
+
+    @staticmethod
+    def _pkcs7_unpad(data, block_size):
+        if not data or len(data) % block_size != 0:
+            raise CryptoServiceError("Invalid padded data.")
+        padding_size = data[-1]
+        if padding_size < 1 or padding_size > block_size:
+            raise CryptoServiceError("Invalid padding size.")
+        if data[-padding_size:] != bytes([padding_size]) * padding_size:
+            raise CryptoServiceError("Invalid PKCS7 padding.")
+        return data[:-padding_size]
+
+    @staticmethod
+    def _feistel_round_function(key_bytes, round_index, data, output_size):
+        digest = hashlib.sha256(key_bytes + bytes([round_index]) + data).digest()
+        return digest[:output_size]
 
     @classmethod
-    def generate_aes_key(cls):
-        cls._require_dependency()
-        return secrets.token_bytes(32)
+    def _encrypt_block(cls, block, key_bytes, rounds):
+        half = len(block) // 2
+        left = block[:half]
+        right = block[half:]
+        for round_index in range(rounds):
+            function_output = cls._feistel_round_function(key_bytes, round_index, right, half)
+            left, right = right, cls._xor_bytes(left, function_output)
+        return left + right
 
     @classmethod
-    def generate_rsa_key_pair(cls):
-        cls._require_dependency()
-        private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        public_key = private_key.public_key()
-        private_pem = private_key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.TraditionalOpenSSL,
-            encryption_algorithm=serialization.NoEncryption(),
-        ).decode("utf-8")
-        public_pem = public_key.public_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PublicFormat.SubjectPublicKeyInfo,
-        ).decode("utf-8")
-        return public_pem, private_pem
+    def _decrypt_block(cls, block, key_bytes, rounds):
+        half = len(block) // 2
+        left = block[:half]
+        right = block[half:]
+        for round_index in reversed(range(rounds)):
+            function_output = cls._feistel_round_function(key_bytes, round_index, left, half)
+            left, right = cls._xor_bytes(right, function_output), left
+        return left + right
+
+    @classmethod
+    def _encrypt_cbc(cls, input_path, output_path, key_bytes, block_size, rounds):
+        iv = secrets.token_bytes(block_size)
+        with open(input_path, "rb") as source_file:
+            plaintext = source_file.read()
+        padded_plaintext = cls._pkcs7_pad(plaintext, block_size)
+        previous = iv
+        ciphertext_blocks = [iv]
+        for index in range(0, len(padded_plaintext), block_size):
+            block = padded_plaintext[index:index + block_size]
+            xored = cls._xor_bytes(block, previous)
+            encrypted = cls._encrypt_block(xored, key_bytes, rounds)
+            ciphertext_blocks.append(encrypted)
+            previous = encrypted
+        with open(output_path, "wb") as target_file:
+            target_file.write(b"".join(ciphertext_blocks))
+
+    @classmethod
+    def _decrypt_cbc(cls, input_path, output_path, key_bytes, block_size, rounds):
+        with open(input_path, "rb") as source_file:
+            payload = source_file.read()
+        if len(payload) < block_size * 2 or len(payload) % block_size != 0:
+            raise CryptoServiceError("Invalid encrypted payload.")
+        iv = payload[:block_size]
+        ciphertext = payload[block_size:]
+        previous = iv
+        plaintext_blocks = []
+        for index in range(0, len(ciphertext), block_size):
+            block = ciphertext[index:index + block_size]
+            decrypted = cls._decrypt_block(block, key_bytes, rounds)
+            plaintext_blocks.append(cls._xor_bytes(decrypted, previous))
+            previous = block
+        plaintext = cls._pkcs7_unpad(b"".join(plaintext_blocks), block_size)
+        with open(output_path, "wb") as target_file:
+            target_file.write(plaintext)
 
     @classmethod
     def encrypt_aes_256_cbc(cls, input_path, output_path, key_bytes):
-        cls._require_dependency()
-        iv_bytes = secrets.token_bytes(16)
-        cipher = Cipher(algorithms.AES(key_bytes), modes.CBC(iv_bytes))
-        encryptor = cipher.encryptor()
-        with open(input_path, "rb") as source_file:
-            plaintext = source_file.read()
-        padder = PKCS7(128).padder()
-        padded_plaintext = padder.update(plaintext) + padder.finalize()
-        ciphertext = encryptor.update(padded_plaintext) + encryptor.finalize()
-        with open(output_path, "wb") as target_file:
-            target_file.write(iv_bytes + ciphertext)
+        cls._encrypt_cbc(input_path, output_path, key_bytes, block_size=16, rounds=8)
 
     @classmethod
     def decrypt_aes_256_cbc(cls, input_path, output_path, key_bytes):
-        cls._require_dependency()
-        with open(input_path, "rb") as source_file:
-            iv_bytes = source_file.read(16)
-            ciphertext = source_file.read()
-        cipher = Cipher(algorithms.AES(key_bytes), modes.CBC(iv_bytes))
-        decryptor = cipher.decryptor()
-        padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
-        unpadder = PKCS7(128).unpadder()
-        plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
-        with open(output_path, "wb") as target_file:
-            target_file.write(plaintext)
+        cls._decrypt_cbc(input_path, output_path, key_bytes, block_size=16, rounds=8)
+
+    @classmethod
+    def encrypt_des_cbc(cls, input_path, output_path, key_bytes):
+        cls._encrypt_cbc(input_path, output_path, key_bytes, block_size=8, rounds=6)
+
+    @classmethod
+    def decrypt_des_cbc(cls, input_path, output_path, key_bytes):
+        cls._decrypt_cbc(input_path, output_path, key_bytes, block_size=8, rounds=6)
 
 
 class KeyManagementService:
@@ -284,29 +336,39 @@ class KeyManagementService:
         framework_name = framework.name.lower()
 
         if algorithm_name.startswith("AES"):
-            if framework_name == "openssl":
-                key_bytes = OpenSSLService.generate_aes_key()
-            else:
-                key_bytes = CryptographyService.generate_aes_key()
-            encoded_key = base64.b64encode(key_bytes).decode("utf-8")
+            key_bytes = (
+                OpenSSLService.generate_symmetric_key(32)
+                if framework_name == "openssl"
+                else CustomPythonService.generate_symmetric_key(32)
+            )
             return KeyRepository.create(
                 name=name,
                 algorithm_id=algorithm.id,
                 framework_id=framework.id,
                 key_type="symmetric",
-                key_value=encoded_key,
+                key_value=base64.b64encode(key_bytes).decode("utf-8"),
+            )
+
+        if algorithm_name.startswith("DES"):
+            key_bytes = (
+                OpenSSLService.generate_symmetric_key(8)
+                if framework_name == "openssl"
+                else CustomPythonService.generate_symmetric_key(8)
+            )
+            return KeyRepository.create(
+                name=name,
+                algorithm_id=algorithm.id,
+                framework_id=framework.id,
+                key_type="symmetric",
+                key_value=base64.b64encode(key_bytes).decode("utf-8"),
             )
 
         if algorithm_name.startswith("RSA"):
+            if framework_name != "openssl":
+                raise CryptoServiceError("RSA key generation is supported only with OpenSSL.")
             private_path = os.path.join(RuntimePaths.keys_dir, f"{name}_private.pem")
             public_path = os.path.join(RuntimePaths.keys_dir, f"{name}_public.pem")
-            if framework_name == "openssl":
-                public_pem, private_pem = OpenSSLService.generate_rsa_key_pair(private_path, public_path)
-            else:
-                public_pem, private_pem = CryptographyService.generate_rsa_key_pair()
-                private_path = KeyManagementService._write_key_file(f"{name}_private.pem", private_pem)
-                public_path = KeyManagementService._write_key_file(f"{name}_public.pem", public_pem)
-
+            public_pem, private_pem = OpenSSLService.generate_rsa_key_pair(private_path, public_path)
             return KeyRepository.create(
                 name=name,
                 algorithm_id=algorithm.id,
@@ -342,7 +404,11 @@ class FileManagementService:
             shutil.copy2(file_path, target_path)
         original_hash = HashService.sha256_for_file(target_path)
         existing = next(
-            (item for item in FileRepository.get_all() if os.path.abspath(item.original_path) == os.path.abspath(target_path)),
+            (
+                item
+                for item in FileRepository.get_all()
+                if os.path.abspath(item.original_path) == os.path.abspath(target_path)
+            ),
             None,
         )
         if existing:
@@ -369,7 +435,7 @@ class CryptoManagerService:
         if not key_record.is_active:
             raise CryptoServiceError("Selected key is inactive.")
         if algorithm.type == "symmetric" and key_record.key_type != "symmetric":
-            raise CryptoServiceError("AES operations require a symmetric key.")
+            raise CryptoServiceError("Symmetric operations require a symmetric key.")
         if algorithm.type == "asymmetric" and key_record.key_type not in {"keypair", "public", "private"}:
             raise CryptoServiceError("RSA operations require a public/private key pair.")
 
@@ -396,20 +462,40 @@ class CryptoManagerService:
         )
 
     @staticmethod
-    def _run_aes_encrypt(framework_name, input_path, output_path, key_bytes):
+    def _run_symmetric_encrypt(algorithm_name, framework_name, input_path, output_path, key_bytes):
         if framework_name == "OpenSSL":
-            OpenSSLService.encrypt_aes_256_cbc(input_path, output_path, key_bytes)
-        elif framework_name == "Cryptography":
-            CryptographyService.encrypt_aes_256_cbc(input_path, output_path, key_bytes)
+            if algorithm_name == "AES-256-CBC":
+                OpenSSLService.encrypt_aes_256_cbc(input_path, output_path, key_bytes)
+            elif algorithm_name == "DES-CBC":
+                OpenSSLService.encrypt_des_cbc(input_path, output_path, key_bytes)
+            else:
+                raise CryptoServiceError(f"Unsupported OpenSSL algorithm: {algorithm_name}")
+        elif framework_name == "Custom":
+            if algorithm_name == "AES-256-CBC":
+                CustomPythonService.encrypt_aes_256_cbc(input_path, output_path, key_bytes)
+            elif algorithm_name == "DES-CBC":
+                CustomPythonService.encrypt_des_cbc(input_path, output_path, key_bytes)
+            else:
+                raise CryptoServiceError(f"Unsupported Custom algorithm: {algorithm_name}")
         else:
             raise CryptoServiceError(f"Unsupported framework: {framework_name}")
 
     @staticmethod
-    def _run_aes_decrypt(framework_name, input_path, output_path, key_bytes):
+    def _run_symmetric_decrypt(algorithm_name, framework_name, input_path, output_path, key_bytes):
         if framework_name == "OpenSSL":
-            OpenSSLService.decrypt_aes_256_cbc(input_path, output_path, key_bytes)
-        elif framework_name == "Cryptography":
-            CryptographyService.decrypt_aes_256_cbc(input_path, output_path, key_bytes)
+            if algorithm_name == "AES-256-CBC":
+                OpenSSLService.decrypt_aes_256_cbc(input_path, output_path, key_bytes)
+            elif algorithm_name == "DES-CBC":
+                OpenSSLService.decrypt_des_cbc(input_path, output_path, key_bytes)
+            else:
+                raise CryptoServiceError(f"Unsupported OpenSSL algorithm: {algorithm_name}")
+        elif framework_name == "Custom":
+            if algorithm_name == "AES-256-CBC":
+                CustomPythonService.decrypt_aes_256_cbc(input_path, output_path, key_bytes)
+            elif algorithm_name == "DES-CBC":
+                CustomPythonService.decrypt_des_cbc(input_path, output_path, key_bytes)
+            else:
+                raise CryptoServiceError(f"Unsupported Custom algorithm: {algorithm_name}")
         else:
             raise CryptoServiceError(f"Unsupported framework: {framework_name}")
 
@@ -421,12 +507,14 @@ class CryptoManagerService:
         output_path = os.path.join(RuntimePaths.encrypted_dir, output_name)
         try:
             with MetricCollector() as metrics:
-                if algorithm.name == "AES-256-CBC":
+                if algorithm.type == "symmetric":
                     key_bytes = KeyManagementService.decode_symmetric_key(key_record)
-                    CryptoManagerService._run_aes_encrypt(
-                        framework.name, managed_file.original_path, output_path, key_bytes
+                    CryptoManagerService._run_symmetric_encrypt(
+                        algorithm.name, framework.name, managed_file.original_path, output_path, key_bytes
                     )
                 elif algorithm.name == "RSA-2048":
+                    if framework.name != "OpenSSL":
+                        raise CryptoServiceError("RSA encryption is supported only with OpenSSL.")
                     public_path, _ = KeyManagementService.key_paths(key_record)
                     if not public_path:
                         raise CryptoServiceError("RSA encryption requires a stored public key path.")
@@ -441,18 +529,14 @@ class CryptoManagerService:
                 encrypted_hash=encrypted_hash,
                 status="encrypted",
             )
-            OperationRepository.update(
-                operation.id,
-                status="success",
-                notes=f"{algorithm.name} encryption completed.",
-            )
+            OperationRepository.update(operation.id, status="success", notes=f"{algorithm.name} encryption completed.")
             performance = CryptoManagerService._save_performance(
                 operation.id, metrics, managed_file.original_path, output_path
             )
             return OperationResult(
                 managed_file=FileRepository.get_by_id(managed_file.id),
                 operation=OperationRepository.get_by_id(operation.id),
-                performance=performance,
+                performance=PerformanceRepository.get_by_id(performance.id),
                 output_path=output_path,
                 message="Encryption completed successfully.",
             )
@@ -467,16 +551,17 @@ class CryptoManagerService:
         if not managed_file.encrypted_path or not os.path.exists(managed_file.encrypted_path):
             raise CryptoServiceError("No encrypted file is registered for the selected record.")
         operation = CryptoManagerService._create_operation(managed_file, algorithm, framework, key_record, "decrypt")
-        output_name = f"decrypted_{Path(managed_file.original_name).name}"
-        output_path = os.path.join(RuntimePaths.decrypted_dir, output_name)
+        output_path = os.path.join(RuntimePaths.decrypted_dir, f"decrypted_{Path(managed_file.original_name).name}")
         try:
             with MetricCollector() as metrics:
-                if algorithm.name == "AES-256-CBC":
+                if algorithm.type == "symmetric":
                     key_bytes = KeyManagementService.decode_symmetric_key(key_record)
-                    CryptoManagerService._run_aes_decrypt(
-                        framework.name, managed_file.encrypted_path, output_path, key_bytes
+                    CryptoManagerService._run_symmetric_decrypt(
+                        algorithm.name, framework.name, managed_file.encrypted_path, output_path, key_bytes
                     )
                 elif algorithm.name == "RSA-2048":
+                    if framework.name != "OpenSSL":
+                        raise CryptoServiceError("RSA decryption is supported only with OpenSSL.")
                     _, private_path = KeyManagementService.key_paths(key_record)
                     if not private_path:
                         raise CryptoServiceError("RSA decryption requires a stored private key path.")
@@ -506,7 +591,7 @@ class CryptoManagerService:
             return OperationResult(
                 managed_file=FileRepository.get_by_id(managed_file.id),
                 operation=OperationRepository.get_by_id(operation.id),
-                performance=performance,
+                performance=PerformanceRepository.get_by_id(performance.id),
                 output_path=output_path,
                 message=notes,
             )
