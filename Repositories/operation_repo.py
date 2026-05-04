@@ -40,6 +40,19 @@ class OperationRepository:
         return CryptoOperation.query.order_by(CryptoOperation.started_at.desc()).all()
 
     @staticmethod
+    def get_latest_successful_encrypt_for_file(file_id, algorithm_id=None, framework_id=None):
+        query = CryptoOperation.query.filter_by(
+            file_id=file_id,
+            operation_type="encrypt",
+            status="success",
+        )
+        if algorithm_id is not None:
+            query = query.filter_by(algorithm_id=algorithm_id)
+        if framework_id is not None:
+            query = query.filter_by(framework_id=framework_id)
+        return query.order_by(CryptoOperation.started_at.desc()).first()
+
+    @staticmethod
     def update(operation_id, **kwargs):
         operation = db.session.get(CryptoOperation, operation_id)
         if not operation:

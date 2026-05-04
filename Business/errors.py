@@ -1,0 +1,2 @@
+class CryptoServiceError(Exception):
+    pass

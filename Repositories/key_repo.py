@@ -1,4 +1,5 @@
-from Model.models import Key, db
+from Model.models import Algorithm, Key, db
+from sqlalchemy.orm import joinedload
 
 
 class KeyRepository:
@@ -39,11 +40,68 @@ class KeyRepository:
 
     @staticmethod
     def get_all():
-        return Key.query.order_by(Key.created_at.desc()).all()
+        return (
+            Key.query.options(joinedload(Key.algorithm), joinedload(Key.framework))
+            .order_by(Key.created_at.desc(), Key.id.desc())
+            .all()
+        )
 
     @staticmethod
     def get_active():
-        return Key.query.filter_by(is_active=True).order_by(Key.created_at.desc()).all()
+        return (
+            Key.query.options(joinedload(Key.algorithm), joinedload(Key.framework))
+            .filter_by(is_active=True)
+            .order_by(Key.created_at.desc(), Key.id.desc())
+            .all()
+        )
+
+    @staticmethod
+    def count_keys():
+        return Key.query.count()
+
+    @staticmethod
+    def get_keys_paginated(page, page_size):
+        safe_page = max(int(page or 1), 1)
+        safe_page_size = max(int(page_size or 10), 1)
+        return (
+            Key.query.options(joinedload(Key.algorithm), joinedload(Key.framework))
+            .order_by(Key.created_at.desc(), Key.id.desc())
+            .offset((safe_page - 1) * safe_page_size)
+            .limit(safe_page_size)
+            .all()
+        )
+
+    @staticmethod
+    def _compatible_keys_query(framework_id, algorithm):
+        query = (
+            Key.query.options(joinedload(Key.algorithm), joinedload(Key.framework))
+            .filter(Key.is_active.is_(True), Key.framework_id == framework_id)
+        )
+        if not algorithm:
+            return query.filter(Key.id == -1)
+        if algorithm.type == "hybrid":
+            return query.join(Algorithm, Key.algorithm_id == Algorithm.id).filter(Algorithm.name == "RSA-2048")
+        return query.filter(Key.algorithm_id == algorithm.id)
+
+    @staticmethod
+    def count_compatible_active_keys(framework_id, algorithm):
+        return KeyRepository._compatible_keys_query(framework_id, algorithm).count()
+
+    @staticmethod
+    def get_compatible_active_keys_paginated(framework_id, algorithm, page, page_size):
+        safe_page = max(int(page or 1), 1)
+        safe_page_size = max(int(page_size or 10), 1)
+        return (
+            KeyRepository._compatible_keys_query(framework_id, algorithm)
+            .order_by(Key.created_at.desc(), Key.id.desc())
+            .offset((safe_page - 1) * safe_page_size)
+            .limit(safe_page_size)
+            .all()
+        )
+
+    @staticmethod
+    def resolve_rsa_algorithm():
+        return Algorithm.query.filter_by(name="RSA-2048").first()
 
     @staticmethod
     def update(key_id, **kwargs):

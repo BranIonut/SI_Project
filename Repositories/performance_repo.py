@@ -3,13 +3,27 @@ from Model.models import Performance, db
 
 class PerformanceRepository:
     @staticmethod
-    def create(operation_id, execution_time_ms, memory_usage_mb, input_size_bytes, output_size_bytes):
+    def create(
+        operation_id,
+        execution_time_ms,
+        memory_usage_mb,
+        input_size_bytes,
+        output_size_bytes,
+        time_per_byte_ms=None,
+        time_per_byte_us=None,
+        throughput_bytes_per_second=None,
+        throughput_mib_per_second=None,
+    ):
         metrics = Performance(
             operation_id=operation_id,
             execution_time_ms=execution_time_ms,
             memory_usage_mb=memory_usage_mb,
             input_size_bytes=input_size_bytes,
             output_size_bytes=output_size_bytes,
+            time_per_byte_ms=time_per_byte_ms,
+            time_per_byte_us=time_per_byte_us,
+            throughput_bytes_per_second=throughput_bytes_per_second,
+            throughput_mib_per_second=throughput_mib_per_second,
         )
         db.session.add(metrics)
         db.session.commit()

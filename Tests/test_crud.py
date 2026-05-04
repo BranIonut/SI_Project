@@ -12,6 +12,7 @@ from Business.crypto_service import (
     FileManagementService,
     HashService,
     KeyManagementService,
+    PerformanceMetricCalculator,
 )
 from Model.models import BASE_DIR, app, db, ensure_runtime_directories, init_db, seed_defaults
 from Repositories.algorithm_repo import AlgorithmRepository
@@ -26,15 +27,40 @@ def unique_name(prefix):
     return f"{prefix}_{uuid.uuid4().hex[:8]}"
 
 
+def runtime_data_dirs():
+    return (
+        os.path.join(BASE_DIR, "data", "original"),
+        os.path.join(BASE_DIR, "data", "encrypted"),
+        os.path.join(BASE_DIR, "data", "decrypted"),
+        os.path.join(BASE_DIR, "data", "keys"),
+        os.path.join(BASE_DIR, "data", "test_tmp"),
+    )
+
+
+def clean_runtime_files():
+    for path in runtime_data_dirs():
+        os.makedirs(path, exist_ok=True)
+        for entry in os.listdir(path):
+            if entry == ".gitkeep":
+                continue
+            full_path = os.path.join(path, entry)
+            if os.path.isdir(full_path):
+                shutil.rmtree(full_path, ignore_errors=True)
+            else:
+                os.remove(full_path)
+
+
 @pytest.fixture(autouse=True)
 def clean_database():
     ensure_runtime_directories()
+    clean_runtime_files()
     with app.app_context():
         db.drop_all()
         db.create_all()
         seed_defaults()
         yield
         db.session.remove()
+    clean_runtime_files()
 
 
 @pytest.fixture
@@ -56,11 +82,23 @@ def write_sample_file(sandbox_dir, name, content):
     return file_path
 
 
+def framework_by_name(name):
+    with app.app_context():
+        return FrameworkRepository.get_by_name(name)
+
+
+def algorithm_by_name(name):
+    with app.app_context():
+        return AlgorithmRepository.get_by_name(name)
+
+
 def test_database_creation_works():
     init_db(seed=True)
     with app.app_context():
         inspector = inspect(db.engine)
         table_names = set(inspector.get_table_names())
+        performance_columns = {column["name"] for column in inspector.get_columns("performances")}
+        operation_columns = {column["name"] for column in inspector.get_columns("crypto_operations")}
     assert {
         "frameworks",
         "algorithms",
@@ -69,14 +107,18 @@ def test_database_creation_works():
         "crypto_operations",
         "performances",
     }.issubset(table_names)
+    assert {"time_per_byte_ms", "time_per_byte_us", "throughput_bytes_per_second", "throughput_mib_per_second"}.issubset(performance_columns)
+    assert {"encrypted_data_key", "iv_nonce", "auth_tag", "key_wrap_algorithm", "data_encryption_algorithm", "operation_metadata_json"}.issubset(operation_columns)
 
 
 def test_default_frameworks_and_algorithms_exist():
     with app.app_context():
         frameworks = {framework.name for framework in FrameworkRepository.get_all()}
         algorithms = {algorithm.name for algorithm in AlgorithmRepository.get_all()}
-    assert frameworks == {"OpenSSL", "Custom"}
-    assert {"AES-256-CBC", "DES-CBC", "RSA-2048"}.issubset(algorithms)
+        cryptography_fw = FrameworkRepository.get_by_name("Cryptography")
+    assert frameworks == {"OpenSSL", "Cryptography", "Custom Educational"}
+    assert {"AES-256-CBC", "AES-256-GCM", "DES-CBC", "RSA-2048", "Hybrid RSA-AES"}.issubset(algorithms)
+    assert cryptography_fw.display_name == "Python cryptography"
 
 
 def test_framework_crud():
@@ -97,7 +139,7 @@ def test_algorithm_crud():
 
 def test_key_crud():
     with app.app_context():
-        framework = FrameworkRepository.get_by_name("Custom")
+        framework = FrameworkRepository.get_by_name("Custom Educational")
         algorithm = AlgorithmRepository.get_by_name("DES-CBC")
         key_record = KeyRepository.create(
             name=unique_name("key"),
@@ -151,10 +193,100 @@ def test_operation_and_performance_crud(sandbox_dir):
         )
         assert OperationRepository.get_by_id(operation.id).status == "running"
         assert OperationRepository.update(operation.id, status="success", notes="ok").status == "success"
-        performance = PerformanceRepository.create(operation.id, 12.5, 1.2, 100, 120)
+        performance = PerformanceRepository.create(operation.id, 12.5, 1.2, 100, 120, 0.125, 125.0, 8000.0, 0.0076)
         assert PerformanceRepository.get_by_id(performance.id).operation_id == operation.id
+        assert PerformanceRepository.get_by_id(performance.id).time_per_byte_us == 125.0
         assert PerformanceRepository.delete(performance.id) is True
         assert OperationRepository.delete(operation.id) is True
+
+
+def test_count_keys_and_get_keys_paginated_empty_db_case():
+    with app.app_context():
+        for key in KeyRepository.get_all():
+            KeyRepository.delete(key.id)
+        assert KeyRepository.count_keys() == 0
+        assert KeyRepository.get_keys_paginated(1, 10) == []
+
+
+def test_get_keys_paginated_first_middle_last_pages():
+    with app.app_context():
+        framework = FrameworkRepository.get_by_name("Custom Educational")
+        algorithm = AlgorithmRepository.get_by_name("DES-CBC")
+        created_names = []
+        for index in range(23):
+            name = f"page_key_{index:02d}"
+            KeyRepository.create(
+                name=name,
+                algorithm_id=algorithm.id,
+                framework_id=framework.id,
+                key_type="symmetric",
+                key_value=f"value_{index}",
+            )
+            created_names.append(name)
+
+        assert KeyRepository.count_keys() == 23
+        first_page = KeyRepository.get_keys_paginated(1, 10)
+        middle_page = KeyRepository.get_keys_paginated(2, 10)
+        last_page = KeyRepository.get_keys_paginated(3, 10)
+
+    assert len(first_page) == 10
+    assert len(middle_page) == 10
+    assert len(last_page) == 3
+    ordered_names = [item.name for item in first_page + middle_page + last_page]
+    assert ordered_names == list(reversed(created_names))
+
+
+def test_compatible_key_pagination_for_setup_dropdown():
+    with app.app_context():
+        framework = FrameworkRepository.get_by_name("Cryptography")
+        algorithm = AlgorithmRepository.get_by_name("AES-256-CBC")
+        hybrid_algorithm = AlgorithmRepository.get_by_name("Hybrid RSA-AES")
+        rsa_algorithm = AlgorithmRepository.get_by_name("RSA-2048")
+
+        for index in range(12):
+            KeyRepository.create(
+                name=f"compat_aes_{index:02d}",
+                algorithm_id=algorithm.id,
+                framework_id=framework.id,
+                key_type="symmetric",
+                key_value=f"value_{index}",
+            )
+        for index in range(7):
+            KeyRepository.create(
+                name=f"compat_rsa_{index:02d}",
+                algorithm_id=rsa_algorithm.id,
+                framework_id=framework.id,
+                key_type="keypair",
+                public_key_value=f"pub_{index}",
+                private_key_value=f"priv_{index}",
+            )
+
+        assert KeyRepository.count_compatible_active_keys(framework.id, algorithm) == 12
+        first_page = KeyRepository.get_compatible_active_keys_paginated(framework.id, algorithm, 1, 5)
+        last_page = KeyRepository.get_compatible_active_keys_paginated(framework.id, algorithm, 3, 5)
+        hybrid_page = KeyRepository.get_compatible_active_keys_paginated(framework.id, hybrid_algorithm, 1, 10)
+
+    assert len(first_page) == 5
+    assert len(last_page) == 2
+    assert all(item.algorithm.name == "AES-256-CBC" for item in first_page)
+    assert len(hybrid_page) == 7
+    assert all(item.algorithm.name == "RSA-2048" for item in hybrid_page)
+
+
+def test_performance_calculations_include_normalized_metrics():
+    metrics = PerformanceMetricCalculator.calculate(50.0, 2.5, 1000, 1200)
+    assert metrics.time_per_byte_ms == pytest.approx(0.05)
+    assert metrics.time_per_byte_us == pytest.approx(50.0)
+    assert metrics.throughput_bytes_per_second == pytest.approx(20000.0)
+    assert metrics.throughput_mib_per_second == pytest.approx(20000.0 / (1024 * 1024))
+
+
+def test_performance_calculations_protect_zero_size_input():
+    metrics = PerformanceMetricCalculator.calculate(0.0, 0.0, 0, 0)
+    assert metrics.time_per_byte_ms is None
+    assert metrics.time_per_byte_us is None
+    assert metrics.throughput_bytes_per_second is None
+    assert metrics.throughput_mib_per_second is None
 
 
 def _roundtrip_test(sandbox_dir, algorithm_name, framework_name, file_name, content):
@@ -167,12 +299,15 @@ def _roundtrip_test(sandbox_dir, algorithm_name, framework_name, file_name, cont
         encrypt_result = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
         decrypt_result = CryptoManagerService.decrypt_file(encrypt_result.managed_file, algorithm, framework, key_record)
         refreshed_file = FileRepository.get_by_id(managed_file.id)
+        last_encrypt = OperationRepository.get_latest_successful_encrypt_for_file(managed_file.id, algorithm.id, framework.id)
     assert os.path.exists(encrypt_result.output_path)
     assert os.path.exists(decrypt_result.output_path)
     assert refreshed_file.original_hash == refreshed_file.decrypted_hash
     assert refreshed_file.integrity_verified is True
     assert decrypt_result.performance.execution_time_ms >= 0
     assert decrypt_result.performance.memory_usage_mb >= 0
+    assert last_encrypt is not None
+    return encrypt_result, decrypt_result, refreshed_file, last_encrypt
 
 
 def test_aes_openssl_encrypt_decrypt_roundtrip(sandbox_dir):
@@ -180,7 +315,7 @@ def test_aes_openssl_encrypt_decrypt_roundtrip(sandbox_dir):
 
 
 def test_aes_custom_encrypt_decrypt_roundtrip(sandbox_dir):
-    _roundtrip_test(sandbox_dir, "AES-256-CBC", "Custom", "custom_aes.txt", b"Custom AES roundtrip")
+    _roundtrip_test(sandbox_dir, "AES-256-CBC", "Custom Educational", "custom_aes.txt", b"Custom AES roundtrip")
 
 
 def test_des_openssl_encrypt_decrypt_roundtrip(sandbox_dir):
@@ -188,22 +323,43 @@ def test_des_openssl_encrypt_decrypt_roundtrip(sandbox_dir):
 
 
 def test_des_custom_encrypt_decrypt_roundtrip(sandbox_dir):
-    _roundtrip_test(sandbox_dir, "DES-CBC", "Custom", "custom_des.txt", b"Custom DES roundtrip")
+    _roundtrip_test(sandbox_dir, "DES-CBC", "Custom Educational", "custom_des.txt", b"Custom DES roundtrip")
 
 
 def test_rsa_encrypt_decrypt_small_demo_file_works(sandbox_dir):
-    input_path = write_sample_file(sandbox_dir, "small_rsa.txt", b"small rsa demo")
+    _roundtrip_test(sandbox_dir, "RSA-2048", "OpenSSL", "small_rsa.txt", b"small rsa demo")
+
+
+def test_cryptography_framework_exists_after_seed():
     with app.app_context():
-        framework = FrameworkRepository.get_by_name("OpenSSL")
-        algorithm = AlgorithmRepository.get_by_name("RSA-2048")
-        managed_file = FileManagementService.register_file(input_path)
-        key_record = KeyManagementService.generate_key(unique_name("rsaenc"), algorithm, framework)
-        encrypt_result = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
-        decrypt_result = CryptoManagerService.decrypt_file(encrypt_result.managed_file, algorithm, framework, key_record)
-        refreshed_file = FileRepository.get_by_id(managed_file.id)
-    assert os.path.exists(encrypt_result.output_path)
-    assert os.path.exists(decrypt_result.output_path)
+        framework = FrameworkRepository.get_by_name("Cryptography")
+    assert framework is not None
+    assert framework.display_name == "Python cryptography"
+
+
+def test_cryptography_aes_cbc_encrypt_decrypt_hash_matches(sandbox_dir):
+    _, _, refreshed_file, encrypt_op = _roundtrip_test(
+        sandbox_dir,
+        "AES-256-CBC",
+        "Cryptography",
+        "crypto_aes_cbc.txt",
+        b"Cryptography AES CBC content",
+    )
     assert refreshed_file.original_hash == refreshed_file.decrypted_hash
+    assert encrypt_op.auth_tag is not None
+
+
+def test_cryptography_aes_gcm_encrypt_decrypt_hash_matches(sandbox_dir):
+    _, _, refreshed_file, encrypt_op = _roundtrip_test(
+        sandbox_dir,
+        "AES-256-GCM",
+        "Cryptography",
+        "crypto_aes_gcm.txt",
+        b"Cryptography AES GCM content",
+    )
+    assert refreshed_file.original_hash == refreshed_file.decrypted_hash
+    assert encrypt_op.iv_nonce is not None
+    assert encrypt_op.auth_tag is not None
 
 
 def test_sha256_hash_correctness(sandbox_dir):
@@ -215,7 +371,7 @@ def test_sha256_hash_correctness(sandbox_dir):
 def test_original_hash_equals_decrypted_hash_after_roundtrip(sandbox_dir):
     input_path = write_sample_file(sandbox_dir, "hash_roundtrip.txt", b"hash roundtrip validation")
     with app.app_context():
-        framework = FrameworkRepository.get_by_name("Custom")
+        framework = FrameworkRepository.get_by_name("Custom Educational")
         algorithm = AlgorithmRepository.get_by_name("AES-256-CBC")
         managed_file = FileManagementService.register_file(input_path)
         key_record = KeyManagementService.generate_key(unique_name("hashkey"), algorithm, framework)
@@ -239,3 +395,38 @@ def test_invalid_algorithm_key_combination_is_rejected(sandbox_dir):
         rsa_key = KeyManagementService.generate_key(unique_name("invalidrsa"), rsa_algorithm, openssl_fw)
         with pytest.raises(CryptoServiceError, match="Selected key does not belong to the selected algorithm"):
             CryptoManagerService.encrypt_file(managed_file, aes_algorithm, openssl_fw, rsa_key)
+
+
+def test_hybrid_rsa_aes_encrypt_decrypt_large_file_and_save_wrapped_key(sandbox_dir):
+    large_content = (b"hybrid-large-file-" * 64) + b"tail"
+    input_path = write_sample_file(sandbox_dir, "hybrid_large.bin", large_content)
+    with app.app_context():
+        framework = FrameworkRepository.get_by_name("Cryptography")
+        algorithm = AlgorithmRepository.get_by_name("Hybrid RSA-AES")
+        managed_file = FileManagementService.register_file(input_path)
+        key_record = KeyManagementService.generate_key(unique_name("hybrid"), algorithm, framework)
+        encrypt_result = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
+        decrypt_result = CryptoManagerService.decrypt_file(encrypt_result.managed_file, algorithm, framework, key_record)
+        refreshed_file = FileRepository.get_by_id(managed_file.id)
+        encrypt_operation = OperationRepository.get_latest_successful_encrypt_for_file(managed_file.id, algorithm.id, framework.id)
+        performance = PerformanceRepository.get_by_operation_id(decrypt_result.operation.id)
+    assert len(large_content) > 190
+    assert refreshed_file.original_hash == refreshed_file.decrypted_hash
+    assert encrypt_operation.encrypted_data_key is not None
+    assert encrypt_operation.iv_nonce is not None
+    assert encrypt_operation.auth_tag is not None
+    assert encrypt_operation.key_wrap_algorithm == "RSA-OAEP-SHA256"
+    assert performance is not None
+
+
+def test_hybrid_rsa_aes_wrong_private_key_fails(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "wrong_key.bin", b"wrong private key test" * 32)
+    with app.app_context():
+        framework = FrameworkRepository.get_by_name("Cryptography")
+        algorithm = AlgorithmRepository.get_by_name("Hybrid RSA-AES")
+        managed_file = FileManagementService.register_file(input_path)
+        correct_key = KeyManagementService.generate_key(unique_name("hybrid_ok"), algorithm, framework)
+        wrong_key = KeyManagementService.generate_key(unique_name("hybrid_bad"), algorithm, framework)
+        encrypted = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, correct_key)
+        with pytest.raises(CryptoServiceError, match="private key may be wrong"):
+            CryptoManagerService.decrypt_file(encrypted.managed_file, algorithm, framework, wrong_key)

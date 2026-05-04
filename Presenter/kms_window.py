@@ -41,6 +41,14 @@ class KMSWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.selected_file_path = None
+        self.keys_current_page = 1
+        self.keys_page_size = 10
+        self.keys_total_pages = 0
+        self.compatible_keys_current_page = 1
+        self.compatible_keys_page_size = 10
+        self.compatible_keys_total_pages = 0
+        self._algorithms_cache = []
+        self._frameworks_cache = []
 
         init_db(seed=True)
 
@@ -144,7 +152,7 @@ class KMSWindow(QWidget):
         layout.addWidget(file_group)
 
         setup_group = QGroupBox("2. Crypto Setup")
-        setup_group.setFixedHeight(255)
+        setup_group.setFixedHeight(295)
 
         setup_layout = QVBoxLayout(setup_group)
         setup_layout.setContentsMargins(12, 0, 12, 8)
@@ -160,6 +168,7 @@ class KMSWindow(QWidget):
         self.combo_fw.currentIndexChanged.connect(self._selection_changed)
 
         self.combo_key = self._combo()
+        self.combo_key.currentIndexChanged.connect(self.refresh_details)
 
         setup_layout.addWidget(self._label("Managed File"))
         setup_layout.addWidget(self.combo_files)
@@ -172,6 +181,37 @@ class KMSWindow(QWidget):
 
         setup_layout.addWidget(self._label("Key"))
         setup_layout.addWidget(self.combo_key)
+
+        compatible_keys_pagination = QHBoxLayout()
+        compatible_keys_pagination.setSpacing(6)
+
+        self.btn_prev_compatible_keys_page = QPushButton("Prev Keys")
+        self.btn_prev_compatible_keys_page.setObjectName("neutralButton")
+        self.btn_prev_compatible_keys_page.setFixedHeight(14)
+        self.btn_prev_compatible_keys_page.clicked.connect(self.prev_compatible_keys_page)
+
+        self.btn_next_compatible_keys_page = QPushButton("Next Keys")
+        self.btn_next_compatible_keys_page.setObjectName("neutralButton")
+        self.btn_next_compatible_keys_page.setFixedHeight(14)
+        self.btn_next_compatible_keys_page.clicked.connect(self.next_compatible_keys_page)
+
+        self.compatible_keys_page_size_combo = self._combo()
+        self.compatible_keys_page_size_combo.setFixedWidth(76)
+        self.compatible_keys_page_size_combo.setFixedHeight(20)
+        for size in (5, 10, 20, 50):
+            self.compatible_keys_page_size_combo.addItem(str(size), size)
+        self.compatible_keys_page_size_combo.setCurrentIndex(1)
+        self.compatible_keys_page_size_combo.currentIndexChanged.connect(self.change_compatible_keys_page_size)
+
+        self.compatible_keys_page_label = QLabel("Keys 0 / 0")
+        self.compatible_keys_page_label.setObjectName("fieldLabel")
+
+        compatible_keys_pagination.addWidget(self.btn_prev_compatible_keys_page)
+        compatible_keys_pagination.addWidget(self.btn_next_compatible_keys_page)
+        compatible_keys_pagination.addWidget(self.compatible_keys_page_size_combo)
+        compatible_keys_pagination.addStretch(1)
+        compatible_keys_pagination.addWidget(self.compatible_keys_page_label)
+        setup_layout.addLayout(compatible_keys_pagination)
 
         layout.addWidget(setup_group)
 
@@ -269,9 +309,55 @@ class KMSWindow(QWidget):
         layout.addWidget(self._section("Recent Operations", self.operations_table), 3)
 
         self.performance_table = self._table(
-            ["Operation ID", "Time (ms)", "Memory (MB)", "Input Size", "Output Size", "Created"]
+            [
+                "Operation ID",
+                "Time (ms)",
+                "Memory (MB)",
+                "Input Size",
+                "Output Size",
+                "Time/Byte (us)",
+                "Throughput (MiB/s)",
+                "Created",
+            ]
         )
         layout.addWidget(self._section("Performance History", self.performance_table), 2)
+
+        self.keys_table = self._table(
+            ["ID", "Name", "Algorithm", "Framework", "Type", "Active", "Created"]
+        )
+        layout.addWidget(self._section("Stored Keys", self.keys_table), 2)
+
+        pagination_box = QFrame()
+        pagination_layout = QHBoxLayout(pagination_box)
+        pagination_layout.setContentsMargins(0, 0, 0, 0)
+        pagination_layout.setSpacing(8)
+
+        self.btn_prev_keys_page = QPushButton("Previous Page")
+        self.btn_prev_keys_page.setObjectName("neutralButton")
+        self.btn_prev_keys_page.clicked.connect(self.prev_keys_page)
+
+        self.btn_next_keys_page = QPushButton("Next Page")
+        self.btn_next_keys_page.setObjectName("neutralButton")
+        self.btn_next_keys_page.clicked.connect(self.next_keys_page)
+
+        self.keys_page_size_combo = self._combo()
+        self.keys_page_size_combo.setFixedWidth(90)
+        for size in (5, 10, 20, 50):
+            self.keys_page_size_combo.addItem(str(size), size)
+        self.keys_page_size_combo.setCurrentIndex(1)
+        self.keys_page_size_combo.currentIndexChanged.connect(self.change_keys_page_size)
+
+        self.keys_page_label = QLabel("Page 0 / 0")
+        self.keys_page_label.setObjectName("fieldLabel")
+
+        pagination_layout.addWidget(self.btn_prev_keys_page)
+        pagination_layout.addWidget(self.btn_next_keys_page)
+        pagination_layout.addWidget(self._label("Page Size"))
+        pagination_layout.addWidget(self.keys_page_size_combo)
+        pagination_layout.addStretch(1)
+        pagination_layout.addWidget(self.keys_page_label)
+
+        layout.addWidget(pagination_box)
 
         self.details_box = QTextEdit()
         self.details_box.setReadOnly(True)
@@ -597,6 +683,8 @@ class KMSWindow(QWidget):
         """
 
     def _selection_changed(self):
+        self.refresh_framework_options()
+        self.compatible_keys_current_page = 1
         self.load_keys()
         self.refresh_details()
 
@@ -615,8 +703,10 @@ class KMSWindow(QWidget):
             files = FileRepository.get_all()
             algorithms = AlgorithmRepository.get_all()
             frameworks = FrameworkRepository.get_all()
-            keys = KeyRepository.get_all()
+            key_count = KeyRepository.count_keys()
             operations = OperationRepository.get_all()
+            self._algorithms_cache = algorithms
+            self._frameworks_cache = frameworks
 
             for managed_file in files:
                 label = f"{managed_file.original_name} [{managed_file.status.upper()}]"
@@ -626,22 +716,47 @@ class KMSWindow(QWidget):
                 mode = f" / {alg.mode}" if getattr(alg, "mode", None) else ""
                 self.combo_alg.addItem(f"{alg.name} ({alg.type}{mode})", alg.id)
 
-            for fw in frameworks:
-                version = f" {fw.version}" if getattr(fw, "version", None) else ""
-                self.combo_fw.addItem(f"{fw.name}{version}", fw.id)
-
             self.framework_badge.setText(f"Frameworks: {len(frameworks)}")
             self.algorithm_badge.setText(f"Algorithms: {len(algorithms)}")
             self.metric_operation_count.value_label.setText(str(len(operations)))
-            self.metric_key_count.value_label.setText(str(len(keys)))
+            self.metric_key_count.value_label.setText(str(key_count))
 
         self.combo_files.blockSignals(False)
         self.combo_alg.blockSignals(False)
         self.combo_fw.blockSignals(False)
         self.combo_key.blockSignals(False)
 
+        self.refresh_framework_options()
         self.load_keys()
+        self.load_keys_page()
         self.refresh_details()
+
+    def refresh_framework_options(self):
+        selected_framework_id = self.combo_fw.currentData()
+        selected_algorithm_id = self.combo_alg.currentData()
+        selected_algorithm = next(
+            (algorithm for algorithm in self._algorithms_cache if algorithm.id == selected_algorithm_id),
+            None,
+        )
+
+        self.combo_fw.blockSignals(True)
+        self.combo_fw.clear()
+
+        for framework in self._frameworks_cache:
+            if selected_algorithm and not CryptoManagerService.is_framework_supported_for_algorithm(
+                framework.name,
+                selected_algorithm.name,
+            ):
+                continue
+            version = f" {framework.version}" if getattr(framework, "version", None) else ""
+            display_name = getattr(framework, "display_name", None) or framework.name
+            self.combo_fw.addItem(f"{display_name}{version}", framework.id)
+
+        if self.combo_fw.count():
+            restored_index = self.combo_fw.findData(selected_framework_id)
+            self.combo_fw.setCurrentIndex(restored_index if restored_index >= 0 else 0)
+
+        self.combo_fw.blockSignals(False)
 
     def load_keys(self):
         self.combo_key.clear()
@@ -651,30 +766,108 @@ class KMSWindow(QWidget):
 
         if not algorithm_id or not framework_id:
             self.combo_key.addItem("No key available", None)
+            self.compatible_keys_total_pages = 0
+            self._update_compatible_keys_pagination_state()
             return
 
         with app.app_context():
-            keys = [
-                key
-                for key in KeyRepository.get_active()
-                if key.algorithm_id == algorithm_id and key.framework_id == framework_id
-            ]
+            selected_algorithm = AlgorithmRepository.get_by_id(algorithm_id)
+            total_keys = KeyRepository.count_compatible_active_keys(framework_id, selected_algorithm)
+            if not selected_algorithm or total_keys == 0:
+                keys = []
+                self.compatible_keys_total_pages = 0
+                self.compatible_keys_current_page = 1
+            else:
+                self.compatible_keys_total_pages = max(
+                    (total_keys + self.compatible_keys_page_size - 1) // self.compatible_keys_page_size,
+                    1,
+                )
+                self.compatible_keys_current_page = min(
+                    max(self.compatible_keys_current_page, 1),
+                    self.compatible_keys_total_pages,
+                )
+                keys = KeyRepository.get_compatible_active_keys_paginated(
+                    framework_id,
+                    selected_algorithm,
+                    self.compatible_keys_current_page,
+                    self.compatible_keys_page_size,
+                )
 
         if not keys:
             self.combo_key.addItem("No matching key available", None)
+            self._update_compatible_keys_pagination_state()
             return
 
         for key in keys:
             self.combo_key.addItem(f"{key.name} [{key.key_type}]", key.id)
+        self._update_compatible_keys_pagination_state()
 
-    def selected_entities(self):
+    def _update_compatible_keys_pagination_state(self):
+        current_display = 0 if self.compatible_keys_total_pages == 0 else self.compatible_keys_current_page
+        self.compatible_keys_page_label.setText(f"Keys {current_display} / {self.compatible_keys_total_pages}")
+        self.btn_prev_compatible_keys_page.setEnabled(
+            self.compatible_keys_current_page > 1 and self.compatible_keys_total_pages > 0
+        )
+        self.btn_next_compatible_keys_page.setEnabled(
+            self.compatible_keys_current_page < self.compatible_keys_total_pages
+        )
+
+    def change_compatible_keys_page_size(self):
+        self.compatible_keys_page_size = int(self.compatible_keys_page_size_combo.currentData() or 10)
+        self.compatible_keys_current_page = 1
+        self.load_keys()
+
+    def prev_compatible_keys_page(self):
+        if self.compatible_keys_current_page > 1:
+            self.compatible_keys_current_page -= 1
+            self.load_keys()
+
+    def next_compatible_keys_page(self):
+        if self.compatible_keys_current_page < self.compatible_keys_total_pages:
+            self.compatible_keys_current_page += 1
+            self.load_keys()
+
+    def change_keys_page_size(self):
+        self.keys_page_size = int(self.keys_page_size_combo.currentData() or 10)
+        self.keys_current_page = 1
+        self.load_keys_page()
+
+    def prev_keys_page(self):
+        if self.keys_current_page > 1:
+            self.keys_current_page -= 1
+            self.load_keys_page()
+
+    def next_keys_page(self):
+        if self.keys_current_page < self.keys_total_pages:
+            self.keys_current_page += 1
+            self.load_keys_page()
+
+    def load_keys_page(self):
         with app.app_context():
-            managed_file = FileRepository.get_by_id(self.combo_files.currentData())
-            algorithm = AlgorithmRepository.get_by_id(self.combo_alg.currentData())
-            framework = FrameworkRepository.get_by_id(self.combo_fw.currentData())
-            key_record = KeyRepository.get_by_id(self.combo_key.currentData())
+            total_keys = KeyRepository.count_keys()
 
-        return managed_file, algorithm, framework, key_record
+            if total_keys == 0:
+                self.keys_total_pages = 0
+                self.keys_current_page = 1
+                keys = []
+            else:
+                self.keys_total_pages = max((total_keys + self.keys_page_size - 1) // self.keys_page_size, 1)
+                self.keys_current_page = min(max(self.keys_current_page, 1), self.keys_total_pages)
+                keys = KeyRepository.get_keys_paginated(self.keys_current_page, self.keys_page_size)
+
+        self._populate_keys_table(keys)
+        current_display = 0 if self.keys_total_pages == 0 else self.keys_current_page
+        self.keys_page_label.setText(f"Page {current_display} / {self.keys_total_pages}")
+        self.btn_prev_keys_page.setEnabled(self.keys_current_page > 1 and self.keys_total_pages > 0)
+        self.btn_next_keys_page.setEnabled(self.keys_current_page < self.keys_total_pages)
+
+    def selected_entity_ids(self):
+        return (
+            self.combo_files.currentData(),
+            self.combo_alg.currentData(),
+            self.combo_fw.currentData(),
+            self.combo_key.currentData(),
+        )
 
     def select_file(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "Select File", "", "All Files (*)")
@@ -692,9 +885,10 @@ class KMSWindow(QWidget):
 
         with app.app_context():
             managed_file = FileManagementService.register_file(self.selected_file_path)
+            file_name = managed_file.original_name
 
         self.status_label.setText(
-            f"Registered file: {managed_file.original_name}\nOriginal SHA-256 hash stored in DB."
+            f"Registered file: {file_name}\nOriginal SHA-256 hash stored in DB."
         )
 
         self.selected_file_path = None
@@ -727,9 +921,12 @@ class KMSWindow(QWidget):
             except CryptoServiceError as exc:
                 QMessageBox.critical(self, "Key Generation Error", str(exc))
                 return
+            key_name_value = key_record.name
+            algorithm_name = algorithm.name
+            framework_name = framework.name
 
         self.status_label.setText(
-            f"Generated key: {key_record.name}\nAlgorithm: {algorithm.name}\nFramework: {framework.name}"
+            f"Generated key: {key_name_value}\nAlgorithm: {algorithm_name}\nFramework: {framework_name}"
         )
 
         self.load_data()
@@ -741,9 +938,9 @@ class KMSWindow(QWidget):
         self._run_crypto_operation("decrypt")
 
     def _run_crypto_operation(self, operation_type):
-        managed_file, algorithm, framework, key_record = self.selected_entities()
+        file_id, algorithm_id, framework_id, key_id = self.selected_entity_ids()
 
-        if not managed_file or not algorithm or not framework or not key_record:
+        if not file_id or not algorithm_id or not framework_id or not key_id:
             QMessageBox.warning(
                 self,
                 "Warning",
@@ -753,6 +950,11 @@ class KMSWindow(QWidget):
 
         try:
             with app.app_context():
+                managed_file = FileRepository.get_by_id(file_id)
+                algorithm = AlgorithmRepository.get_by_id(algorithm_id)
+                framework = FrameworkRepository.get_by_id(framework_id)
+                key_record = KeyRepository.get_by_id(key_id)
+
                 if operation_type == "encrypt":
                     result = CryptoManagerService.encrypt_file(
                         managed_file,
@@ -781,12 +983,20 @@ class KMSWindow(QWidget):
             return
 
         performance = result.performance
+        integrity_status = (
+            "Verified"
+            if result.managed_file.integrity_verified is True
+            else "Pending"
+            if result.managed_file.integrity_verified is None
+            else "Mismatch"
+        )
+        performance_summary = CryptoManagerService.format_performance_summary(performance)
 
         self.status_label.setText(
             f"{result.message}\n\n"
             f"Output: {result.output_path}\n"
-            f"Time: {performance.execution_time_ms:.2f} ms\n"
-            f"Memory: {performance.memory_usage_mb:.4f} MB"
+            f"Integrity: {integrity_status}\n"
+            f"{performance_summary}"
         )
 
         QMessageBox.information(
@@ -795,8 +1005,8 @@ class KMSWindow(QWidget):
             (
                 f"{result.message}\n\n"
                 f"Output path:\n{result.output_path}\n\n"
-                f"Execution time: {performance.execution_time_ms:.2f} ms\n"
-                f"Memory usage: {performance.memory_usage_mb:.4f} MB"
+                f"Integrity: {integrity_status}\n\n"
+                f"{performance_summary}"
             ),
         )
 
@@ -804,7 +1014,7 @@ class KMSWindow(QWidget):
 
     def show_keys_debug(self):
         with app.app_context():
-            keys = KeyRepository.get_all()
+            keys = KeyRepository.get_keys_paginated(self.keys_current_page, self.keys_page_size)
 
         if not keys:
             self.details_box.setPlainText("No keys stored.")
@@ -924,11 +1134,30 @@ class KMSWindow(QWidget):
                 f"{perf.memory_usage_mb:.4f}",
                 str(perf.input_size_bytes),
                 str(perf.output_size_bytes),
+                f"{perf.time_per_byte_us:.4f}" if perf.time_per_byte_us is not None else "N/A",
+                f"{perf.throughput_mib_per_second:.4f}" if perf.throughput_mib_per_second is not None else "N/A",
                 str(perf.created_at),
             ]
 
             for col, value in enumerate(values):
                 self.performance_table.setItem(row, col, QTableWidgetItem(value))
+
+    def _populate_keys_table(self, keys):
+        self.keys_table.setRowCount(len(keys))
+
+        for row, key in enumerate(keys):
+            values = [
+                str(key.id),
+                key.name,
+                getattr(key.algorithm, "name", str(key.algorithm_id)),
+                getattr(key.framework, "display_name", None) or getattr(key.framework, "name", str(key.framework_id)),
+                key.key_type,
+                "Yes" if key.is_active else "No",
+                str(key.created_at),
+            ]
+
+            for col, value in enumerate(values):
+                self.keys_table.setItem(row, col, QTableWidgetItem(value))
 
     def _color_status_item(self, item, status):
         normalized = status.lower()

@@ -1,6 +1,8 @@
 import base64
 import binascii
 import hashlib
+import json
+import math
 import os
 import secrets
 import shutil
@@ -13,18 +15,16 @@ from typing import Any
 
 try:
     import psutil
-except ImportError:  # pragma: no cover - optional fallback
+except ImportError:  # pragma: no cover
     psutil = None
 
+from Business.cryptography_service import CryptographyCryptoService
+from Business.errors import CryptoServiceError
 from Model.models import BASE_DIR, utc_now
 from Repositories.file_repo import FileRepository
 from Repositories.key_repo import KeyRepository
 from Repositories.operation_repo import OperationRepository
 from Repositories.performance_repo import PerformanceRepository
-
-
-class CryptoServiceError(Exception):
-    pass
 
 
 @dataclass
@@ -34,6 +34,18 @@ class OperationResult:
     performance: Any
     output_path: str
     message: str
+
+
+@dataclass
+class NormalizedPerformanceMetrics:
+    execution_time_ms: float
+    memory_usage_mb: float
+    input_size_bytes: int
+    output_size_bytes: int
+    time_per_byte_ms: float | None
+    time_per_byte_us: float | None
+    throughput_bytes_per_second: float | None
+    throughput_mib_per_second: float | None
 
 
 class HashService:
@@ -72,6 +84,34 @@ class MetricCollector:
         self.memory_usage_mb = max(peak, current, rss_delta) / (1024 * 1024)
 
 
+class PerformanceMetricCalculator:
+    @staticmethod
+    def calculate(execution_time_ms, memory_usage_mb, input_size_bytes, output_size_bytes):
+        time_per_byte_ms = None
+        time_per_byte_us = None
+        throughput_bytes_per_second = None
+        throughput_mib_per_second = None
+
+        if input_size_bytes > 0:
+            time_per_byte_ms = execution_time_ms / input_size_bytes
+            time_per_byte_us = (execution_time_ms * 1000) / input_size_bytes
+
+        if input_size_bytes > 0 and execution_time_ms > 0:
+            throughput_bytes_per_second = input_size_bytes / (execution_time_ms / 1000)
+            throughput_mib_per_second = throughput_bytes_per_second / (1024 * 1024)
+
+        return NormalizedPerformanceMetrics(
+            execution_time_ms=execution_time_ms,
+            memory_usage_mb=memory_usage_mb,
+            input_size_bytes=input_size_bytes,
+            output_size_bytes=output_size_bytes,
+            time_per_byte_ms=time_per_byte_ms,
+            time_per_byte_us=time_per_byte_us,
+            throughput_bytes_per_second=throughput_bytes_per_second,
+            throughput_mib_per_second=throughput_mib_per_second,
+        )
+
+
 class OpenSSLService:
     MAX_RSA_INPUT_BYTES = 190
 
@@ -86,9 +126,7 @@ class OpenSSLService:
         for candidate in candidates:
             if candidate and os.path.exists(candidate):
                 return candidate
-        raise CryptoServiceError(
-            "OpenSSL executable not found. Set OPENSSL_BIN or install OpenSSL."
-        )
+        raise CryptoServiceError("OpenSSL executable not found. Set OPENSSL_BIN or install OpenSSL.")
 
     @classmethod
     def run_command(cls, arguments):
@@ -121,9 +159,7 @@ class OpenSSLService:
         command = ["enc", f"-{cipher_name}", "-in", input_path, "-out", output_path, "-K", key_hex, "-iv", iv_hex]
         if extra_args:
             command.extend(extra_args)
-        cls.run_command(
-            command
-        )
+        cls.run_command(command)
         with open(output_path, "rb") as encrypted_file:
             payload = encrypted_file.read()
         with open(output_path, "wb") as encrypted_file:
@@ -140,24 +176,10 @@ class OpenSSLService:
         try:
             key_hex = binascii.hexlify(key_bytes).decode("utf-8")
             iv_hex = binascii.hexlify(iv_bytes).decode("utf-8")
-            command = [
-                "enc",
-                "-d",
-                f"-{cipher_name}",
-                "-in",
-                temp_payload_path,
-                "-out",
-                output_path,
-                "-K",
-                key_hex,
-                "-iv",
-                iv_hex,
-            ]
+            command = ["enc", "-d", f"-{cipher_name}", "-in", temp_payload_path, "-out", output_path, "-K", key_hex, "-iv", iv_hex]
             if extra_args:
                 command.extend(extra_args)
-            cls.run_command(
-                command
-            )
+            cls.run_command(command)
         finally:
             if os.path.exists(temp_payload_path):
                 os.remove(temp_payload_path)
@@ -172,51 +194,27 @@ class OpenSSLService:
 
     @classmethod
     def encrypt_des_cbc(cls, input_path, output_path, key_bytes):
-        cls._encrypt_block_cipher(
-            "des-cbc",
-            input_path,
-            output_path,
-            key_bytes,
-            8,
-            extra_args=["-provider", "default", "-provider", "legacy"],
-        )
+        cls._encrypt_block_cipher("des-cbc", input_path, output_path, key_bytes, 8, extra_args=["-provider", "default", "-provider", "legacy"])
 
     @classmethod
     def decrypt_des_cbc(cls, input_path, output_path, key_bytes):
-        cls._decrypt_block_cipher(
-            "des-cbc",
-            input_path,
-            output_path,
-            key_bytes,
-            8,
-            extra_args=["-provider", "default", "-provider", "legacy"],
-        )
+        cls._decrypt_block_cipher("des-cbc", input_path, output_path, key_bytes, 8, extra_args=["-provider", "default", "-provider", "legacy"])
 
     @classmethod
     def encrypt_rsa_2048(cls, input_path, output_path, public_key_path):
         if os.path.getsize(input_path) > cls.MAX_RSA_INPUT_BYTES:
-            raise CryptoServiceError(
-                "RSA is only used for small demo files or key encryption. Use AES for normal file encryption."
-            )
-        cls.run_command(
-            [
-                "pkeyutl",
-                "-encrypt",
-                "-pubin",
-                "-inkey",
-                public_key_path,
-                "-in",
-                input_path,
-                "-out",
-                output_path,
-            ]
-        )
+            raise CryptoServiceError("RSA is only used for small demo files or key encryption. Use Hybrid RSA-AES for normal file encryption.")
+        cls.run_command([
+            "pkeyutl", "-encrypt", "-pubin", "-inkey", public_key_path, "-in", input_path, "-out", output_path,
+            "-pkeyopt", "rsa_padding_mode:oaep", "-pkeyopt", "rsa_oaep_md:sha256",
+        ])
 
     @classmethod
     def decrypt_rsa_2048(cls, input_path, output_path, private_key_path):
-        cls.run_command(
-            ["pkeyutl", "-decrypt", "-inkey", private_key_path, "-in", input_path, "-out", output_path]
-        )
+        cls.run_command([
+            "pkeyutl", "-decrypt", "-inkey", private_key_path, "-in", input_path, "-out", output_path,
+            "-pkeyopt", "rsa_padding_mode:oaep", "-pkeyopt", "rsa_oaep_md:sha256",
+        ])
 
 
 class CustomPythonService:
@@ -336,11 +334,12 @@ class KeyManagementService:
         framework_name = framework.name.lower()
 
         if algorithm_name.startswith("AES"):
-            key_bytes = (
-                OpenSSLService.generate_symmetric_key(32)
-                if framework_name == "openssl"
-                else CustomPythonService.generate_symmetric_key(32)
-            )
+            if framework_name == "openssl":
+                key_bytes = OpenSSLService.generate_symmetric_key(32)
+            elif framework_name == "cryptography":
+                key_bytes = CryptographyCryptoService.generate_symmetric_key(32)
+            else:
+                key_bytes = CustomPythonService.generate_symmetric_key(32)
             return KeyRepository.create(
                 name=name,
                 algorithm_id=algorithm.id,
@@ -363,15 +362,25 @@ class KeyManagementService:
                 key_value=base64.b64encode(key_bytes).decode("utf-8"),
             )
 
-        if algorithm_name.startswith("RSA"):
-            if framework_name != "openssl":
-                raise CryptoServiceError("RSA key generation is supported only with OpenSSL.")
-            private_path = os.path.join(RuntimePaths.keys_dir, f"{name}_private.pem")
-            public_path = os.path.join(RuntimePaths.keys_dir, f"{name}_public.pem")
-            public_pem, private_pem = OpenSSLService.generate_rsa_key_pair(private_path, public_path)
+        if algorithm_name.startswith("RSA") or algorithm_name.startswith("HYBRID"):
+            if framework_name == "openssl":
+                private_path = os.path.join(RuntimePaths.keys_dir, f"{name}_private.pem")
+                public_path = os.path.join(RuntimePaths.keys_dir, f"{name}_public.pem")
+                public_pem, private_pem = OpenSSLService.generate_rsa_key_pair(private_path, public_path)
+            elif framework_name == "cryptography":
+                public_pem, private_pem = CryptographyCryptoService.generate_rsa_key_pair()
+                public_path = KeyManagementService._write_key_file(f"{name}_public.pem", public_pem)
+                private_path = KeyManagementService._write_key_file(f"{name}_private.pem", private_pem)
+            else:
+                raise CryptoServiceError("RSA key generation is not available for the legacy custom framework.")
+
+            rsa_algorithm = algorithm if algorithm_name.startswith("RSA") else KeyRepository.resolve_rsa_algorithm()
+            if not rsa_algorithm:
+                raise CryptoServiceError("RSA-2048 algorithm is required before generating hybrid keys.")
+
             return KeyRepository.create(
                 name=name,
-                algorithm_id=algorithm.id,
+                algorithm_id=rsa_algorithm.id,
                 framework_id=framework.id,
                 key_type="keypair",
                 key_path=f"{public_path}|{private_path}",
@@ -428,16 +437,61 @@ class FileManagementService:
 
 
 class CryptoManagerService:
+    SYMMETRIC_FRAMEWORK_MAP = {
+        "AES-256-CBC": {"OpenSSL", "Cryptography", "Custom Educational"},
+        "AES-256-GCM": {"Cryptography"},
+        "DES-CBC": {"OpenSSL", "Custom Educational"},
+    }
+    ASYMMETRIC_FRAMEWORK_MAP = {
+        "RSA-2048": {"OpenSSL", "Cryptography"},
+        "Hybrid RSA-AES": {"Cryptography"},
+    }
+
+    @classmethod
+    def supported_framework_names_for_algorithm(cls, algorithm_name):
+        if algorithm_name in cls.SYMMETRIC_FRAMEWORK_MAP:
+            return cls.SYMMETRIC_FRAMEWORK_MAP[algorithm_name]
+        if algorithm_name in cls.ASYMMETRIC_FRAMEWORK_MAP:
+            return cls.ASYMMETRIC_FRAMEWORK_MAP[algorithm_name]
+        return set()
+
+    @classmethod
+    def is_framework_supported_for_algorithm(cls, framework_name, algorithm_name):
+        return framework_name in cls.supported_framework_names_for_algorithm(algorithm_name)
+
+    @classmethod
+    def is_key_compatible_with_algorithm(cls, key_record, algorithm):
+        if algorithm.type == "hybrid":
+            return key_record.key_type in {"keypair", "public", "private"} and getattr(key_record.algorithm, "name", None) == "RSA-2048"
+        return key_record.algorithm_id == algorithm.id
+
     @staticmethod
-    def validate_combination(algorithm, key_record):
+    def validate_combination(algorithm, key_record, operation_type, framework=None):
+        if framework and not CryptoManagerService.is_framework_supported_for_algorithm(framework.name, algorithm.name):
+            raise CryptoServiceError(
+                f"Unsupported framework/algorithm combination: {framework.name} with {algorithm.name}."
+            )
+        if algorithm.type == "hybrid":
+            if key_record.key_type not in {"keypair", "public", "private"}:
+                raise CryptoServiceError("Hybrid RSA-AES operations require an RSA key pair.")
+            if not key_record.is_active:
+                raise CryptoServiceError("Selected key is inactive.")
+            if framework and key_record.framework_id != framework.id:
+                raise CryptoServiceError("Selected RSA key does not belong to the selected framework.")
+            return
+
         if key_record.algorithm_id != algorithm.id:
             raise CryptoServiceError("Selected key does not belong to the selected algorithm.")
         if not key_record.is_active:
             raise CryptoServiceError("Selected key is inactive.")
+        if framework and key_record.framework_id != framework.id:
+            raise CryptoServiceError("Selected key does not belong to the selected framework.")
         if algorithm.type == "symmetric" and key_record.key_type != "symmetric":
             raise CryptoServiceError("Symmetric operations require a symmetric key.")
         if algorithm.type == "asymmetric" and key_record.key_type not in {"keypair", "public", "private"}:
             raise CryptoServiceError("RSA operations require a public/private key pair.")
+        if operation_type == "decrypt" and algorithm.type in {"asymmetric", "hybrid"} and not key_record.private_key_value:
+            raise CryptoServiceError("Decryption requires a private key.")
 
     @staticmethod
     def _create_operation(managed_file, algorithm, framework, key_record, operation_type):
@@ -453,16 +507,27 @@ class CryptoManagerService:
 
     @staticmethod
     def _save_performance(operation_id, metrics, input_path, output_path):
-        return PerformanceRepository.create(
-            operation_id=operation_id,
+        calculated = PerformanceMetricCalculator.calculate(
             execution_time_ms=metrics.execution_time_ms,
             memory_usage_mb=metrics.memory_usage_mb,
             input_size_bytes=os.path.getsize(input_path) if os.path.exists(input_path) else 0,
             output_size_bytes=os.path.getsize(output_path) if os.path.exists(output_path) else 0,
         )
+        return PerformanceRepository.create(
+            operation_id=operation_id,
+            execution_time_ms=calculated.execution_time_ms,
+            memory_usage_mb=calculated.memory_usage_mb,
+            input_size_bytes=calculated.input_size_bytes,
+            output_size_bytes=calculated.output_size_bytes,
+            time_per_byte_ms=calculated.time_per_byte_ms,
+            time_per_byte_us=calculated.time_per_byte_us,
+            throughput_bytes_per_second=calculated.throughput_bytes_per_second,
+            throughput_mib_per_second=calculated.throughput_mib_per_second,
+        )
 
     @staticmethod
     def _run_symmetric_encrypt(algorithm_name, framework_name, input_path, output_path, key_bytes):
+        metadata = {}
         if framework_name == "OpenSSL":
             if algorithm_name == "AES-256-CBC":
                 OpenSSLService.encrypt_aes_256_cbc(input_path, output_path, key_bytes)
@@ -470,18 +535,27 @@ class CryptoManagerService:
                 OpenSSLService.encrypt_des_cbc(input_path, output_path, key_bytes)
             else:
                 raise CryptoServiceError(f"Unsupported OpenSSL algorithm: {algorithm_name}")
-        elif framework_name == "Custom":
+        elif framework_name == "Cryptography":
+            if algorithm_name == "AES-256-CBC":
+                metadata = CryptographyCryptoService.encrypt_aes_256_cbc(input_path, output_path, key_bytes)
+            elif algorithm_name == "AES-256-GCM":
+                metadata = CryptographyCryptoService.encrypt_aes_256_gcm(input_path, output_path, key_bytes)
+            else:
+                raise CryptoServiceError(f"Unsupported Cryptography algorithm: {algorithm_name}")
+        elif framework_name == "Custom Educational":
             if algorithm_name == "AES-256-CBC":
                 CustomPythonService.encrypt_aes_256_cbc(input_path, output_path, key_bytes)
             elif algorithm_name == "DES-CBC":
                 CustomPythonService.encrypt_des_cbc(input_path, output_path, key_bytes)
             else:
-                raise CryptoServiceError(f"Unsupported Custom algorithm: {algorithm_name}")
+                raise CryptoServiceError(f"Unsupported Custom Educational algorithm: {algorithm_name}")
         else:
             raise CryptoServiceError(f"Unsupported framework: {framework_name}")
+        return metadata
 
     @staticmethod
-    def _run_symmetric_decrypt(algorithm_name, framework_name, input_path, output_path, key_bytes):
+    def _run_symmetric_decrypt(algorithm_name, framework_name, input_path, output_path, key_bytes, source_operation=None):
+        metadata = {}
         if framework_name == "OpenSSL":
             if algorithm_name == "AES-256-CBC":
                 OpenSSLService.decrypt_aes_256_cbc(input_path, output_path, key_bytes)
@@ -489,36 +563,96 @@ class CryptoManagerService:
                 OpenSSLService.decrypt_des_cbc(input_path, output_path, key_bytes)
             else:
                 raise CryptoServiceError(f"Unsupported OpenSSL algorithm: {algorithm_name}")
-        elif framework_name == "Custom":
+        elif framework_name == "Cryptography":
+            if algorithm_name == "AES-256-CBC":
+                metadata = CryptographyCryptoService.decrypt_aes_256_cbc(input_path, output_path, key_bytes)
+            elif algorithm_name == "AES-256-GCM":
+                if not source_operation or not source_operation.iv_nonce or not source_operation.auth_tag:
+                    raise CryptoServiceError("AES-GCM decryption requires stored nonce and authentication tag.")
+                metadata = CryptographyCryptoService.decrypt_aes_256_gcm(
+                    input_path,
+                    output_path,
+                    key_bytes,
+                    source_operation.iv_nonce,
+                    source_operation.auth_tag,
+                )
+            else:
+                raise CryptoServiceError(f"Unsupported Cryptography algorithm: {algorithm_name}")
+        elif framework_name == "Custom Educational":
             if algorithm_name == "AES-256-CBC":
                 CustomPythonService.decrypt_aes_256_cbc(input_path, output_path, key_bytes)
             elif algorithm_name == "DES-CBC":
                 CustomPythonService.decrypt_des_cbc(input_path, output_path, key_bytes)
             else:
-                raise CryptoServiceError(f"Unsupported Custom algorithm: {algorithm_name}")
+                raise CryptoServiceError(f"Unsupported Custom Educational algorithm: {algorithm_name}")
         else:
             raise CryptoServiceError(f"Unsupported framework: {framework_name}")
+        return metadata
+
+    @staticmethod
+    def _build_output_path(managed_file, algorithm, suffix):
+        safe_algorithm = algorithm.name.lower().replace("-", "_").replace(" ", "_")
+        output_name = f"{Path(managed_file.original_name).name}.{safe_algorithm}{suffix}"
+        target_dir = RuntimePaths.encrypted_dir if suffix == ".enc" else RuntimePaths.decrypted_dir
+        return os.path.join(target_dir, output_name)
+
+    @staticmethod
+    def _store_operation_metadata(operation_id, metadata, notes=None, status="success", error_message=None):
+        payload = dict(metadata or {})
+        if "operation_metadata_json" not in payload and payload:
+            payload["operation_metadata_json"] = json.dumps(payload, sort_keys=True)
+        return OperationRepository.update(
+            operation_id,
+            status=status,
+            notes=notes,
+            error_message=error_message,
+            encrypted_data_key=payload.get("encrypted_data_key"),
+            iv_nonce=payload.get("iv_nonce"),
+            auth_tag=payload.get("auth_tag"),
+            key_wrap_algorithm=payload.get("key_wrap_algorithm"),
+            data_encryption_algorithm=payload.get("data_encryption_algorithm"),
+            operation_metadata_json=payload.get("operation_metadata_json"),
+        )
 
     @staticmethod
     def encrypt_file(managed_file, algorithm, framework, key_record):
-        CryptoManagerService.validate_combination(algorithm, key_record)
+        CryptoManagerService.validate_combination(algorithm, key_record, "encrypt", framework)
         operation = CryptoManagerService._create_operation(managed_file, algorithm, framework, key_record, "encrypt")
-        output_name = f"{Path(managed_file.original_name).name}.{algorithm.name.lower().replace('-', '_')}.enc"
-        output_path = os.path.join(RuntimePaths.encrypted_dir, output_name)
+        output_path = CryptoManagerService._build_output_path(managed_file, algorithm, ".enc")
         try:
             with MetricCollector() as metrics:
+                metadata = {}
                 if algorithm.type == "symmetric":
                     key_bytes = KeyManagementService.decode_symmetric_key(key_record)
-                    CryptoManagerService._run_symmetric_encrypt(
+                    metadata = CryptoManagerService._run_symmetric_encrypt(
                         algorithm.name, framework.name, managed_file.original_path, output_path, key_bytes
                     )
                 elif algorithm.name == "RSA-2048":
-                    if framework.name != "OpenSSL":
-                        raise CryptoServiceError("RSA encryption is supported only with OpenSSL.")
                     public_path, _ = KeyManagementService.key_paths(key_record)
-                    if not public_path:
-                        raise CryptoServiceError("RSA encryption requires a stored public key path.")
-                    OpenSSLService.encrypt_rsa_2048(managed_file.original_path, output_path, public_path)
+                    if framework.name == "OpenSSL":
+                        if not public_path:
+                            raise CryptoServiceError("RSA encryption requires a stored public key path.")
+                        OpenSSLService.encrypt_rsa_2048(managed_file.original_path, output_path, public_path)
+                    elif framework.name == "Cryptography":
+                        if not key_record.public_key_value:
+                            raise CryptoServiceError("RSA encryption requires a stored public key.")
+                        CryptographyCryptoService.encrypt_rsa_2048(
+                            managed_file.original_path, output_path, key_record.public_key_value
+                        )
+                    else:
+                        raise CryptoServiceError("RSA encryption is not supported by the legacy custom framework.")
+                    metadata = {
+                        "key_wrap_algorithm": "RSA-OAEP-SHA256",
+                        "data_encryption_algorithm": "RSA-2048",
+                    }
+                elif algorithm.name == "Hybrid RSA-AES":
+                    if framework.name != "Cryptography":
+                        raise CryptoServiceError("Hybrid RSA-AES is currently supported with the Cryptography framework.")
+                    if not key_record.public_key_value:
+                        raise CryptoServiceError("Hybrid encryption requires a stored RSA public key.")
+                    metadata = CryptographyCryptoService.encrypt_hybrid_rsa_aes(
+                        managed_file.original_path, output_path, key_record.public_key_value
+                    )
                 else:
                     raise CryptoServiceError(f"Unsupported algorithm: {algorithm.name}")
 
@@ -528,11 +662,14 @@ class CryptoManagerService:
                 encrypted_path=output_path,
                 encrypted_hash=encrypted_hash,
                 status="encrypted",
+                decrypted_path=None,
+                decrypted_hash=None,
+                integrity_verified=None,
             )
-            OperationRepository.update(operation.id, status="success", notes=f"{algorithm.name} encryption completed.")
-            performance = CryptoManagerService._save_performance(
-                operation.id, metrics, managed_file.original_path, output_path
+            CryptoManagerService._store_operation_metadata(
+                operation.id, metadata, notes=f"{algorithm.name} encryption completed."
             )
+            performance = CryptoManagerService._save_performance(operation.id, metrics, managed_file.original_path, output_path)
             return OperationResult(
                 managed_file=FileRepository.get_by_id(managed_file.id),
                 operation=OperationRepository.get_by_id(operation.id),
@@ -547,25 +684,56 @@ class CryptoManagerService:
 
     @staticmethod
     def decrypt_file(managed_file, algorithm, framework, key_record):
-        CryptoManagerService.validate_combination(algorithm, key_record)
+        CryptoManagerService.validate_combination(algorithm, key_record, "decrypt", framework)
         if not managed_file.encrypted_path or not os.path.exists(managed_file.encrypted_path):
             raise CryptoServiceError("No encrypted file is registered for the selected record.")
         operation = CryptoManagerService._create_operation(managed_file, algorithm, framework, key_record, "decrypt")
         output_path = os.path.join(RuntimePaths.decrypted_dir, f"decrypted_{Path(managed_file.original_name).name}")
         try:
+            source_operation = OperationRepository.get_latest_successful_encrypt_for_file(
+                managed_file.id, algorithm_id=algorithm.id, framework_id=framework.id
+            )
             with MetricCollector() as metrics:
+                metadata = {}
                 if algorithm.type == "symmetric":
                     key_bytes = KeyManagementService.decode_symmetric_key(key_record)
-                    CryptoManagerService._run_symmetric_decrypt(
-                        algorithm.name, framework.name, managed_file.encrypted_path, output_path, key_bytes
+                    metadata = CryptoManagerService._run_symmetric_decrypt(
+                        algorithm.name,
+                        framework.name,
+                        managed_file.encrypted_path,
+                        output_path,
+                        key_bytes,
+                        source_operation=source_operation,
                     )
                 elif algorithm.name == "RSA-2048":
-                    if framework.name != "OpenSSL":
-                        raise CryptoServiceError("RSA decryption is supported only with OpenSSL.")
                     _, private_path = KeyManagementService.key_paths(key_record)
-                    if not private_path:
-                        raise CryptoServiceError("RSA decryption requires a stored private key path.")
-                    OpenSSLService.decrypt_rsa_2048(managed_file.encrypted_path, output_path, private_path)
+                    if framework.name == "OpenSSL":
+                        if not private_path:
+                            raise CryptoServiceError("RSA decryption requires a stored private key path.")
+                        OpenSSLService.decrypt_rsa_2048(managed_file.encrypted_path, output_path, private_path)
+                    elif framework.name == "Cryptography":
+                        if not key_record.private_key_value:
+                            raise CryptoServiceError("RSA decryption requires a stored private key.")
+                        CryptographyCryptoService.decrypt_rsa_2048(
+                            managed_file.encrypted_path, output_path, key_record.private_key_value
+                        )
+                    else:
+                        raise CryptoServiceError("RSA decryption is not supported by the legacy custom framework.")
+                elif algorithm.name == "Hybrid RSA-AES":
+                    if framework.name != "Cryptography":
+                        raise CryptoServiceError("Hybrid RSA-AES is currently supported with the Cryptography framework.")
+                    if not source_operation:
+                        raise CryptoServiceError("Hybrid decryption requires stored encryption metadata.")
+                    metadata = CryptographyCryptoService.decrypt_hybrid_rsa_aes(
+                        managed_file.encrypted_path,
+                        output_path,
+                        key_record.private_key_value,
+                        source_operation.encrypted_data_key,
+                        source_operation.iv_nonce,
+                        source_operation.auth_tag,
+                    )
+                    metadata["encrypted_data_key"] = source_operation.encrypted_data_key
+                    metadata["key_wrap_algorithm"] = source_operation.key_wrap_algorithm
                 else:
                     raise CryptoServiceError(f"Unsupported algorithm: {algorithm.name}")
 
@@ -579,15 +747,14 @@ class CryptoManagerService:
                 integrity_verified=integrity_ok,
                 status="decrypted" if integrity_ok else "failed",
             )
-            OperationRepository.update(
+            CryptoManagerService._store_operation_metadata(
                 operation.id,
-                status="success" if integrity_ok else "failed",
+                metadata,
                 notes=notes,
+                status="success" if integrity_ok else "failed",
                 error_message=None if integrity_ok else "Decrypted hash does not match original hash.",
             )
-            performance = CryptoManagerService._save_performance(
-                operation.id, metrics, managed_file.encrypted_path, output_path
-            )
+            performance = CryptoManagerService._save_performance(operation.id, metrics, managed_file.encrypted_path, output_path)
             return OperationResult(
                 managed_file=FileRepository.get_by_id(managed_file.id),
                 operation=OperationRepository.get_by_id(operation.id),
@@ -599,3 +766,21 @@ class CryptoManagerService:
             FileRepository.update(managed_file.id, status="failed")
             OperationRepository.update(operation.id, status="failed", error_message=str(exc))
             raise
+
+    @staticmethod
+    def format_performance_summary(performance):
+        def fmt(value, digits=4):
+            if value is None:
+                return "N/A"
+            if isinstance(value, (int, float)) and not math.isfinite(value):
+                return "N/A"
+            return f"{value:.{digits}f}"
+
+        return (
+            f"Time: {performance.execution_time_ms:.2f} ms\n"
+            f"Memory: {performance.memory_usage_mb:.4f} MB\n"
+            f"Input size: {performance.input_size_bytes} bytes\n"
+            f"Output size: {performance.output_size_bytes} bytes\n"
+            f"Time per byte: {fmt(performance.time_per_byte_us)} us\n"
+            f"Throughput: {fmt(performance.throughput_mib_per_second)} MiB/s"
+        )
