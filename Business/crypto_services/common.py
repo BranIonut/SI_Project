@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from Business.lab_algorithms import hash_lab
+from Business.crypto_services.constants import STATUS_FAILED, STATUS_SUCCESS
 from Model.models import BASE_DIR, utc_now
 
 try:
@@ -39,12 +40,38 @@ class HashService:
     def sha256_for_file(file_path):
         return hash_lab.sha256_file(file_path)
 
+    @classmethod
+    def hashes_for_paths(cls, **named_paths):
+        return {
+            name: cls.sha256_for_file(path)
+            for name, path in named_paths.items()
+            if path and os.path.exists(path)
+        }
+
+    @staticmethod
+    def is_integrity_verified(original_hash, candidate_hash):
+        return bool(original_hash and original_hash == candidate_hash)
+
 
 class RuntimePaths:
     original_dir = os.path.join(BASE_DIR, "data", "original")
     encrypted_dir = os.path.join(BASE_DIR, "data", "encrypted")
     decrypted_dir = os.path.join(BASE_DIR, "data", "decrypted")
     keys_dir = os.path.join(BASE_DIR, "data", "keys")
+
+    @staticmethod
+    def file_size_or_zero(file_path):
+        return os.path.getsize(file_path) if file_path and os.path.exists(file_path) else 0
+
+    @classmethod
+    def build_encrypted_output_path(cls, managed_file, algorithm):
+        safe_algorithm = algorithm.name.lower().replace("-", "_").replace(" ", "_")
+        output_name = f"{os.path.basename(managed_file.original_name)}.{safe_algorithm}.enc"
+        return os.path.join(cls.encrypted_dir, output_name)
+
+    @classmethod
+    def build_decrypted_output_path(cls, managed_file):
+        return os.path.join(cls.decrypted_dir, f"decrypted_{os.path.basename(managed_file.original_name)}")
 
 
 class MetricCollector:
@@ -92,3 +119,18 @@ class PerformanceMetricCalculator:
             throughput_bytes_per_second=throughput_bytes_per_second,
             throughput_mib_per_second=throughput_mib_per_second,
         )
+
+    @classmethod
+    def calculate_from_paths(cls, execution_time_ms, memory_usage_mb, input_path, output_path):
+        return cls.calculate(
+            execution_time_ms=execution_time_ms,
+            memory_usage_mb=memory_usage_mb,
+            input_size_bytes=RuntimePaths.file_size_or_zero(input_path),
+            output_size_bytes=RuntimePaths.file_size_or_zero(output_path),
+        )
+
+
+class OperationStateResolver:
+    @staticmethod
+    def completion_status(is_successful):
+        return STATUS_SUCCESS if is_successful else STATUS_FAILED

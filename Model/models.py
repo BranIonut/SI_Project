@@ -1,6 +1,20 @@
 import os
 from datetime import datetime, timezone
 
+from Business.crypto_services.constants import (
+    ALGORITHM_AES_256_CBC,
+    ALGORITHM_AES_256_GCM,
+    ALGORITHM_DES_CBC,
+    ALGORITHM_DES_LAB,
+    ALGORITHM_HYBRID_RSA_AES,
+    ALGORITHM_RSA_2048,
+    ALGORITHM_RSA_LAB,
+    FRAMEWORK_CRYPTOGRAPHY,
+    FRAMEWORK_CUSTOM_EDUCATIONAL,
+    FRAMEWORK_CUSTOM_LEGACY,
+    FRAMEWORK_LAB_EDUCATIONAL,
+    FRAMEWORK_OPENSSL,
+)
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import inspect, text
@@ -178,108 +192,113 @@ def migrate_schema():
         _ensure_column("performances", name, ddl)
 
 
+def _upsert_named_record(model_cls, item):
+    record = model_cls.query.filter_by(name=item["name"]).first()
+    if not record:
+        db.session.add(model_cls(**item))
+        return None
+    for field, value in item.items():
+        if field != "name":
+            setattr(record, field, value)
+    return record
+
+
+def _normalize_legacy_custom_framework():
+    canonical = Framework.query.filter_by(name=FRAMEWORK_CUSTOM_LEGACY).first()
+    if canonical is None:
+        canonical = Framework.query.filter_by(name="Custom").first()
+    if canonical is None:
+        canonical = Framework.query.filter_by(name=FRAMEWORK_CUSTOM_EDUCATIONAL).first()
+    if canonical is None:
+        return
+
+    canonical.name = FRAMEWORK_CUSTOM_LEGACY
+    canonical.display_name = FRAMEWORK_CUSTOM_LEGACY
+    canonical.type = "Legacy / educational Python implementation"
+    canonical.version = None
+    canonical.description = (
+        "Legacy educational implementation kept for backwards compatibility. "
+        "Not part of the main encryption workflow and not production-grade."
+    )
+
+
 def seed_defaults():
     framework_defaults = (
         {
-            "name": "OpenSSL",
-            "display_name": "OpenSSL",
+            "name": FRAMEWORK_OPENSSL,
+            "display_name": FRAMEWORK_OPENSSL,
             "type": "CLI / subprocess",
             "version": None,
             "description": "Required cryptographic framework used through subprocess calls for file encryption and decryption.",
         },
         {
-            "name": "Cryptography",
+            "name": FRAMEWORK_CRYPTOGRAPHY,
             "display_name": "Python cryptography",
             "type": "Python library",
             "version": None,
             "description": "Real Python cryptography framework used as an alternative to OpenSSL for encryption/decryption and performance comparison.",
         },
         {
-            "name": "Lab Educational",
-            "display_name": "Lab Educational",
+            "name": FRAMEWORK_LAB_EDUCATIONAL,
+            "display_name": FRAMEWORK_LAB_EDUCATIONAL,
             "type": "Laboratory / educational algorithms",
             "version": None,
             "description": "Educational implementations based on the cryptography laboratory code. Used as an alternative framework for learning and performance comparison with OpenSSL. Not production-grade.",
         },
         {
-            "name": "Custom Educational / Legacy",
-            "display_name": "Custom Educational / Legacy",
+            "name": FRAMEWORK_CUSTOM_LEGACY,
+            "display_name": FRAMEWORK_CUSTOM_LEGACY,
             "type": "Legacy / educational Python implementation",
             "version": None,
             "description": "Legacy educational implementation kept for backwards compatibility. Not part of the main encryption workflow and not production-grade.",
         },
     )
 
-    legacy_custom = Framework.query.filter_by(name="Custom").first()
-    educational = (
-        Framework.query.filter_by(name="Custom Educational / Legacy").first()
-        or Framework.query.filter_by(name="Custom Educational").first()
-    )
-
-    if legacy_custom and not educational:
-        legacy_custom.name = "Custom Educational / Legacy"
-        legacy_custom.display_name = "Custom Educational / Legacy"
-        legacy_custom.type = "Legacy / educational Python implementation"
-        legacy_custom.description = "Legacy educational implementation kept for backwards compatibility. Not part of the main encryption workflow and not production-grade."
-        educational = legacy_custom
-
-    legacy_plain_custom = Framework.query.filter_by(name="Custom Educational").first()
-    if legacy_plain_custom and legacy_plain_custom.name != "Custom Educational / Legacy":
-        legacy_plain_custom.name = "Custom Educational / Legacy"
-        legacy_plain_custom.display_name = "Custom Educational / Legacy"
-        legacy_plain_custom.type = "Legacy / educational Python implementation"
-        legacy_plain_custom.description = "Legacy educational implementation kept for backwards compatibility. Not part of the main encryption workflow and not production-grade."
+    _normalize_legacy_custom_framework()
 
     for item in framework_defaults:
-        framework = Framework.query.filter_by(name=item["name"]).first()
-        if not framework:
-            db.session.add(Framework(**item))
-            continue
-        framework.display_name = item["display_name"]
-        framework.type = item["type"]
-        framework.version = item["version"]
-        framework.description = item["description"]
+        _upsert_named_record(Framework, item)
 
     db.session.flush()
 
     defaults = (
         {
-            "name": "AES-256-CBC",
+            "name": ALGORITHM_AES_256_CBC,
             "type": "symmetric",
             "mode": "CBC",
             "key_size": 256,
             "description": "AES-256-CBC file encryption through OpenSSL and Python cryptography.",
         },
         {
-            "name": "AES-256-GCM",
+            "name": ALGORITHM_AES_256_GCM,
             "type": "symmetric",
             "mode": "GCM",
             "key_size": 256,
             "description": "Authenticated AES encryption using Python cryptography.",
         },
         {
-            "name": "DES-CBC",
+            "name": ALGORITHM_DES_CBC,
             "type": "symmetric",
             "mode": "CBC",
             "key_size": 64,
             "description": "DES-CBC through OpenSSL for compatibility and comparison.",
         },
         {
-            "name": "RSA-2048",
+            "name": ALGORITHM_RSA_2048,
             "type": "asymmetric",
             "mode": "OAEP-SHA256",
             "key_size": 2048,
             "description": "RSA-2048 demo encryption through OpenSSL for small files or key wrapping.",
         },
         {
-            "name": "DES-LAB",
+            "name": ALGORITHM_DES_LAB,
             "type": "symmetric",
             "mode": "ECB / PKCS7",
             "key_size": 64,
             "description": "DES implementation from laboratory code, educational only.",
         },
         {
-            "name": "RSA-LAB",
+            "name": ALGORITHM_RSA_LAB,
             "type": "asymmetric",
             "mode": "Textbook RSA",
             "key_size": 0,
@@ -322,16 +341,9 @@ def seed_defaults():
         },
     )
     for item in defaults:
-        algorithm = Algorithm.query.filter_by(name=item["name"]).first()
-        if not algorithm:
-            db.session.add(Algorithm(**item))
-            continue
-        algorithm.type = item["type"]
-        algorithm.mode = item["mode"]
-        algorithm.key_size = item["key_size"]
-        algorithm.description = item["description"]
+        _upsert_named_record(Algorithm, item)
 
-    for stale_name in ("Hybrid RSA-AES",):
+    for stale_name in (ALGORITHM_HYBRID_RSA_AES,):
         stale_algorithm = Algorithm.query.filter_by(name=stale_name).first()
         if stale_algorithm:
             stale_algorithm.description = (

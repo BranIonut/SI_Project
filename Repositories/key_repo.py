@@ -1,4 +1,5 @@
 from Model.models import Algorithm, Key, db
+from Repositories.common import delete_entity, get_by_id, update_entity
 from sqlalchemy.orm import joinedload
 
 
@@ -32,7 +33,7 @@ class KeyRepository:
 
     @staticmethod
     def get_by_id(key_id):
-        return db.session.get(Key, key_id)
+        return get_by_id(Key, key_id)
 
     @staticmethod
     def get_by_name(name):
@@ -105,20 +106,8 @@ class KeyRepository:
 
     @staticmethod
     def update(key_id, **kwargs):
-        key = db.session.get(Key, key_id)
-        if not key:
-            return None
-        for field, value in kwargs.items():
-            if hasattr(key, field):
-                setattr(key, field, value)
-        db.session.commit()
-        return key
+        return update_entity(Key, key_id, **kwargs)
 
     @staticmethod
     def delete(key_id):
-        key = db.session.get(Key, key_id)
-        if not key:
-            return False
-        db.session.delete(key)
-        db.session.commit()
-        return True
+        return delete_entity(Key, key_id)

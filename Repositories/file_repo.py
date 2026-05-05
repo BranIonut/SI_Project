@@ -1,4 +1,5 @@
 from Model.models import ManagedFile, db
+from Repositories.common import delete_entity, get_by_id, update_entity
 
 
 class FileRepository:
@@ -31,7 +32,7 @@ class FileRepository:
 
     @staticmethod
     def get_by_id(file_id):
-        return db.session.get(ManagedFile, file_id)
+        return get_by_id(ManagedFile, file_id)
 
     @staticmethod
     def get_all():
@@ -39,20 +40,8 @@ class FileRepository:
 
     @staticmethod
     def update(file_id, **kwargs):
-        managed_file = db.session.get(ManagedFile, file_id)
-        if not managed_file:
-            return None
-        for field, value in kwargs.items():
-            if hasattr(managed_file, field):
-                setattr(managed_file, field, value)
-        db.session.commit()
-        return managed_file
+        return update_entity(ManagedFile, file_id, **kwargs)
 
     @staticmethod
     def delete(file_id):
-        managed_file = db.session.get(ManagedFile, file_id)
-        if not managed_file:
-            return False
-        db.session.delete(managed_file)
-        db.session.commit()
-        return True
+        return delete_entity(ManagedFile, file_id)

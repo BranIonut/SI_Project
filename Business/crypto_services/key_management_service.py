@@ -7,6 +7,14 @@ from Business.cryptography_service import CryptographyCryptoService
 from Business.lab_algorithms import base64_lab, rsa_lab
 from Business.lab_crypto_service import LabCryptoService
 from Business.crypto_services.common import RuntimePaths
+from Business.crypto_services.constants import (
+    ALGORITHM_DES_LAB,
+    ALGORITHM_RSA_2048,
+    ALGORITHM_RSA_LAB,
+    FRAMEWORK_CRYPTOGRAPHY,
+    FRAMEWORK_LAB_EDUCATIONAL,
+    FRAMEWORK_OPENSSL,
+)
 from Business.crypto_services.custom_service import CustomPythonService
 from Business.crypto_services.openssl_service import OpenSSLService
 from Business.errors import CryptoServiceError
@@ -27,13 +35,13 @@ class KeyManagementService:
 
     @staticmethod
     def generate_key(name, algorithm, framework):
-        algorithm_name = algorithm.name.upper()
-        framework_name = framework.name.lower()
+        algorithm_name = algorithm.name
+        framework_name = framework.name
 
         if algorithm_name.startswith("AES"):
-            if framework_name == "openssl":
+            if framework_name == FRAMEWORK_OPENSSL:
                 key_bytes = OpenSSLService.generate_symmetric_key(32)
-            elif framework_name == "cryptography":
+            elif framework_name == FRAMEWORK_CRYPTOGRAPHY:
                 key_bytes = CryptographyCryptoService.generate_symmetric_key(32)
             else:
                 key_bytes = CustomPythonService.generate_symmetric_key(32)
@@ -46,12 +54,12 @@ class KeyManagementService:
             )
 
         if algorithm_name.startswith("DES"):
-            if algorithm_name == "DES-LAB" or framework.name == "Lab Educational":
+            if algorithm_name == ALGORITHM_DES_LAB or framework_name == FRAMEWORK_LAB_EDUCATIONAL:
                 key_bytes = secrets.token_bytes(8)
             else:
                 key_bytes = (
                     OpenSSLService.generate_symmetric_key(8)
-                    if framework_name == "openssl"
+                    if framework_name == FRAMEWORK_OPENSSL
                     else CustomPythonService.generate_symmetric_key(8)
                 )
             return KeyRepository.create(
@@ -62,7 +70,7 @@ class KeyManagementService:
                 key_value=KeyManagementService._encode_bytes_for_storage(key_bytes),
             )
 
-        if algorithm_name == "RSA-LAB":
+        if algorithm_name == ALGORITHM_RSA_LAB:
             demo_key = rsa_lab.generate_demo_key_pair()
             return KeyRepository.create(
                 name=name,
@@ -83,11 +91,11 @@ class KeyManagementService:
             )
 
         if algorithm_name.startswith("RSA") or algorithm_name.startswith("HYBRID"):
-            if framework_name == "openssl":
+            if framework_name == FRAMEWORK_OPENSSL:
                 private_path = os.path.join(RuntimePaths.keys_dir, f"{name}_private.pem")
                 public_path = os.path.join(RuntimePaths.keys_dir, f"{name}_public.pem")
                 public_pem, private_pem = OpenSSLService.generate_rsa_key_pair(private_path, public_path)
-            elif framework_name == "cryptography":
+            elif framework_name == FRAMEWORK_CRYPTOGRAPHY:
                 public_pem, private_pem = CryptographyCryptoService.generate_rsa_key_pair()
                 public_path = KeyManagementService._write_key_file(f"{name}_public.pem", public_pem)
                 private_path = KeyManagementService._write_key_file(f"{name}_private.pem", private_pem)
@@ -96,7 +104,7 @@ class KeyManagementService:
 
             rsa_algorithm = algorithm if algorithm_name.startswith("RSA") else KeyRepository.resolve_rsa_algorithm()
             if not rsa_algorithm:
-                raise CryptoServiceError("RSA-2048 algorithm is required before generating hybrid keys.")
+                raise CryptoServiceError(f"{ALGORITHM_RSA_2048} algorithm is required before generating hybrid keys.")
 
             return KeyRepository.create(
                 name=name,

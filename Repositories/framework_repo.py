@@ -1,4 +1,5 @@
 from Model.models import Framework, db
+from Repositories.common import delete_entity, get_by_id, update_entity
 
 
 class FrameworkRepository:
@@ -11,7 +12,7 @@ class FrameworkRepository:
 
     @staticmethod
     def get_by_id(framework_id):
-        return db.session.get(Framework, framework_id)
+        return get_by_id(Framework, framework_id)
 
     @staticmethod
     def get_by_name(name):
@@ -26,20 +27,8 @@ class FrameworkRepository:
 
     @staticmethod
     def update(framework_id, **kwargs):
-        framework = db.session.get(Framework, framework_id)
-        if not framework:
-            return None
-        for field, value in kwargs.items():
-            if hasattr(framework, field) and value is not None:
-                setattr(framework, field, value)
-        db.session.commit()
-        return framework
+        return update_entity(Framework, framework_id, ignore_none=True, **kwargs)
 
     @staticmethod
     def delete(framework_id):
-        framework = db.session.get(Framework, framework_id)
-        if not framework:
-            return False
-        db.session.delete(framework)
-        db.session.commit()
-        return True
+        return delete_entity(Framework, framework_id)

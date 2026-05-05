@@ -2,6 +2,7 @@ import os
 import shutil
 
 from Business.crypto_services.common import HashService, RuntimePaths
+from Business.crypto_services.constants import STATUS_PLAIN
 from Repositories.file_repo import FileRepository
 
 
@@ -12,7 +13,7 @@ class FileManagementService:
         target_path = os.path.join(RuntimePaths.original_dir, original_name)
         if os.path.abspath(file_path) != os.path.abspath(target_path):
             shutil.copy2(file_path, target_path)
-        original_hash = HashService.sha256_for_file(target_path)
+        original_hash = HashService.hashes_for_paths(original_hash=target_path).get("original_hash")
         existing = next(
             (
                 item
@@ -28,7 +29,7 @@ class FileManagementService:
                 original_name=original_name,
                 original_path=target_path,
                 original_hash=original_hash,
-                status="plain" if reset_processed_fields else existing.status,
+                status=STATUS_PLAIN if reset_processed_fields else existing.status,
                 encrypted_path=None if reset_processed_fields else existing.encrypted_path,
                 encrypted_hash=None if reset_processed_fields else existing.encrypted_hash,
                 decrypted_path=None if reset_processed_fields else existing.decrypted_path,
@@ -39,5 +40,5 @@ class FileManagementService:
             original_name=original_name,
             original_path=target_path,
             original_hash=original_hash,
-            status="plain",
+            status=STATUS_PLAIN,
         )

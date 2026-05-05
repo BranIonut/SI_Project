@@ -1,4 +1,5 @@
 from Model.models import Performance, db
+from Repositories.common import delete_entity, get_by_id, update_entity
 
 
 class PerformanceRepository:
@@ -31,7 +32,7 @@ class PerformanceRepository:
 
     @staticmethod
     def get_by_id(performance_id):
-        return db.session.get(Performance, performance_id)
+        return get_by_id(Performance, performance_id)
 
     @staticmethod
     def get_by_operation_id(operation_id):
@@ -43,20 +44,8 @@ class PerformanceRepository:
 
     @staticmethod
     def update(performance_id, **kwargs):
-        performance = db.session.get(Performance, performance_id)
-        if not performance:
-            return None
-        for field, value in kwargs.items():
-            if hasattr(performance, field) and value is not None:
-                setattr(performance, field, value)
-        db.session.commit()
-        return performance
+        return update_entity(Performance, performance_id, ignore_none=True, **kwargs)
 
     @staticmethod
     def delete(performance_id):
-        performance = db.session.get(Performance, performance_id)
-        if not performance:
-            return False
-        db.session.delete(performance)
-        db.session.commit()
-        return True
+        return delete_entity(Performance, performance_id)

@@ -1,4 +1,5 @@
 from Model.models import CryptoOperation, db, utc_now
+from Repositories.common import assign_entity_fields, delete_entity, get_by_id
 
 
 class OperationRepository:
@@ -33,7 +34,7 @@ class OperationRepository:
 
     @staticmethod
     def get_by_id(operation_id):
-        return db.session.get(CryptoOperation, operation_id)
+        return get_by_id(CryptoOperation, operation_id)
 
     @staticmethod
     def get_all():
@@ -57,9 +58,7 @@ class OperationRepository:
         operation = db.session.get(CryptoOperation, operation_id)
         if not operation:
             return None
-        for field, value in kwargs.items():
-            if hasattr(operation, field):
-                setattr(operation, field, value)
+        assign_entity_fields(operation, **kwargs)
         if operation.finished_at is None and kwargs.get("status") in {"success", "failed"}:
             operation.finished_at = utc_now()
         db.session.commit()
@@ -67,9 +66,4 @@ class OperationRepository:
 
     @staticmethod
     def delete(operation_id):
-        operation = db.session.get(CryptoOperation, operation_id)
-        if not operation:
-            return False
-        db.session.delete(operation)
-        db.session.commit()
-        return True
+        return delete_entity(CryptoOperation, operation_id)
