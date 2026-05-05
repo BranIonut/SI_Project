@@ -14,12 +14,13 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
-    QTextEdit,
     QVBoxLayout,
     QWidget,
+    QTextEdit,
 )
 
 from Business.crypto_service import (
@@ -69,11 +70,20 @@ class KMSWindow(QWidget):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
 
-        splitter.addWidget(self._build_left_panel())
-        splitter.addWidget(self._build_right_panel())
+        splitter.addWidget(self._build_scroll_panel(self._build_left_panel()))
+        splitter.addWidget(self._build_scroll_panel(self._build_right_panel()))
         splitter.setSizes([430, 870])
 
         root.addWidget(splitter, 1)
+
+    def _build_scroll_panel(self, content):
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setWidget(content)
+        return scroll
 
     def _build_header(self):
         header = QFrame()
@@ -152,11 +162,10 @@ class KMSWindow(QWidget):
         layout.addWidget(file_group)
 
         setup_group = QGroupBox("2. Crypto Setup")
-        setup_group.setFixedHeight(295)
 
         setup_layout = QVBoxLayout(setup_group)
-        setup_layout.setContentsMargins(12, 0, 12, 8)
-        setup_layout.setSpacing(2)
+        setup_layout.setContentsMargins(12, 18, 12, 12)
+        setup_layout.setSpacing(6)
 
         self.combo_files = self._combo()
         self.combo_files.currentIndexChanged.connect(self.refresh_details)
@@ -170,6 +179,12 @@ class KMSWindow(QWidget):
         self.combo_key = self._combo()
         self.combo_key.currentIndexChanged.connect(self.refresh_details)
 
+        self.setup_hint_label = QLabel(
+            "Select a framework compatible with the algorithm, then browse compatible keys page by page."
+        )
+        self.setup_hint_label.setObjectName("hintLabel")
+        self.setup_hint_label.setWordWrap(True)
+
         setup_layout.addWidget(self._label("Managed File"))
         setup_layout.addWidget(self.combo_files)
 
@@ -181,23 +196,25 @@ class KMSWindow(QWidget):
 
         setup_layout.addWidget(self._label("Key"))
         setup_layout.addWidget(self.combo_key)
+        setup_layout.addWidget(self.setup_hint_label)
 
         compatible_keys_pagination = QHBoxLayout()
         compatible_keys_pagination.setSpacing(6)
 
         self.btn_prev_compatible_keys_page = QPushButton("Prev Keys")
         self.btn_prev_compatible_keys_page.setObjectName("neutralButton")
-        self.btn_prev_compatible_keys_page.setFixedHeight(14)
+        self.btn_prev_compatible_keys_page.setFixedHeight(18)
+
         self.btn_prev_compatible_keys_page.clicked.connect(self.prev_compatible_keys_page)
 
         self.btn_next_compatible_keys_page = QPushButton("Next Keys")
         self.btn_next_compatible_keys_page.setObjectName("neutralButton")
-        self.btn_next_compatible_keys_page.setFixedHeight(14)
+        self.btn_next_compatible_keys_page.setFixedHeight(18)
         self.btn_next_compatible_keys_page.clicked.connect(self.next_compatible_keys_page)
 
         self.compatible_keys_page_size_combo = self._combo()
         self.compatible_keys_page_size_combo.setFixedWidth(76)
-        self.compatible_keys_page_size_combo.setFixedHeight(20)
+        self.compatible_keys_page_size_combo.setFixedHeight(24)
         for size in (5, 10, 20, 50):
             self.compatible_keys_page_size_combo.addItem(str(size), size)
         self.compatible_keys_page_size_combo.setCurrentIndex(1)
@@ -223,12 +240,13 @@ class KMSWindow(QWidget):
         self.btn_generate_key = QPushButton("Generate Key")
         self.btn_generate_key.clicked.connect(self.generate_key)
 
-        self.btn_show_keys = QPushButton("Show Stored Keys")
-        self.btn_show_keys.setObjectName("neutralButton")
-        self.btn_show_keys.clicked.connect(self.show_keys_debug)
-
         key_layout.addWidget(self.btn_generate_key)
-        key_layout.addWidget(self.btn_show_keys)
+        self.key_help_label = QLabel(
+            "Generate keys for the current algorithm/framework pair. Stored keys are listed in the table on the right."
+        )
+        self.key_help_label.setObjectName("hintLabel")
+        self.key_help_label.setWordWrap(True)
+        key_layout.addWidget(self.key_help_label)
 
         layout.addWidget(key_group)
 
@@ -325,7 +343,7 @@ class KMSWindow(QWidget):
         self.keys_table = self._table(
             ["ID", "Name", "Algorithm", "Framework", "Type", "Active", "Created"]
         )
-        layout.addWidget(self._section("Stored Keys", self.keys_table), 2)
+        layout.addWidget(self._section("Stored Keys", self.keys_table), 3)
 
         pagination_box = QFrame()
         pagination_layout = QHBoxLayout(pagination_box)
@@ -358,11 +376,6 @@ class KMSWindow(QWidget):
         pagination_layout.addWidget(self.keys_page_label)
 
         layout.addWidget(pagination_box)
-
-        self.details_box = QTextEdit()
-        self.details_box.setReadOnly(True)
-        self.details_box.setObjectName("debugBox")
-        layout.addWidget(self._section("Debug / Stored Keys", self.details_box), 2)
 
         return panel
 
@@ -497,6 +510,16 @@ class KMSWindow(QWidget):
             margin-bottom: 0px;
         }
 
+        QLabel#hintLabel {
+            color: #A7F3D0;
+            background-color: #021B15;
+            border: 1px solid #0F766E;
+            border-radius: 7px;
+            padding: 6px 8px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
         QLabel#infoLabel {
             color: #D1FAE5;
             background-color: #021B15;
@@ -627,11 +650,6 @@ class KMSWindow(QWidget):
             padding: 8px;
         }
 
-        QTextEdit#debugBox {
-            font-family: Consolas, monospace;
-            color: #D1FAE5;
-        }
-
         QHeaderView::section {
             background-color: #064E3B;
             color: #ECFDF5;
@@ -679,6 +697,11 @@ class KMSWindow(QWidget):
         QScrollBar::add-line:horizontal,
         QScrollBar::sub-line:horizontal {
             width: 0px;
+        }
+
+        QScrollArea {
+            border: none;
+            background-color: transparent;
         }
         """
 
@@ -1011,33 +1034,6 @@ class KMSWindow(QWidget):
         )
 
         self.load_data()
-
-    def show_keys_debug(self):
-        with app.app_context():
-            keys = KeyRepository.get_keys_paginated(self.keys_current_page, self.keys_page_size)
-
-        if not keys:
-            self.details_box.setPlainText("No keys stored.")
-            return
-
-        lines = []
-
-        for key in keys:
-            value = getattr(key, "key_value", None)
-            preview = value[:60] + "..." if value and len(value) > 60 else value
-
-            lines.append(
-                f"ID: {key.id}\n"
-                f"Name: {key.name}\n"
-                f"Algorithm ID: {key.algorithm_id}\n"
-                f"Framework ID: {key.framework_id}\n"
-                f"Type: {key.key_type}\n"
-                f"Active: {key.is_active}\n"
-                f"Value Preview: {preview or 'PEM / key pair stored separately'}\n"
-                f"{'-' * 70}"
-            )
-
-        self.details_box.setPlainText("\n".join(lines))
 
     def refresh_details(self):
         with app.app_context():
