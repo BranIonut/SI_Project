@@ -58,10 +58,6 @@ class HashService:
                 digest.update(chunk)
         return digest.hexdigest()
 
-    @staticmethod
-    def sha256_lab_for_file(file_path):
-        return LabCryptoService.sha256_file(file_path)
-
 
 class RuntimePaths:
     original_dir = os.path.join(BASE_DIR, "data", "original")

@@ -1,11 +1,4 @@
-# modular_arithmetic_lab.py
-# Efficient modular exponentiation used by RSA.
-
 def power_modular(base: int, exponent: int, mod: int) -> int:
-    """
-    Computes (base ** exponent) % mod using square-and-multiply.
-    This keeps the same logic from the lab, with small validation added.
-    """
     if mod <= 0:
         raise ValueError("mod must be positive.")
 
@@ -26,11 +19,3 @@ def power_modular(base: int, exponent: int, mod: int) -> int:
         exponent //= 2
 
     return result
-
-
-def demo() -> None:
-    print(power_modular(289, 11, 1363))
-
-
-if __name__ == "__main__":
-    demo()

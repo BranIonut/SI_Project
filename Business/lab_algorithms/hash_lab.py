@@ -1,6 +1,3 @@
-# hash_lab.py
-# SHA-1, HMAC-SHA1 and SHA-256 educational implementations.
-
 import struct
 from pathlib import Path
 
@@ -75,10 +72,6 @@ def sha1(message_bytes: bytes) -> str:
 
 
 def hmac_custom(key: bytes, message: bytes, hash_func, block_size: int = 64) -> str:
-    """
-    Generic HMAC function.
-    hash_func must return hex string.
-    """
     if len(key) > block_size:
         key = bytes.fromhex(hash_func(key))
 
@@ -169,22 +162,5 @@ def sha256(message_bytes: bytes) -> str:
     return "".join(f"{val:08x}" for val in h)
 
 
-def sha1_file(path: str) -> str:
-    return sha1(Path(path).read_bytes())
-
-
 def sha256_file(path: str) -> str:
     return sha256(Path(path).read_bytes())
-
-
-def demo() -> None:
-    key = b"key"
-    message = b"Hello, World!"
-
-    print(f"SHA-1: {sha1(message)}")
-    print(f"SHA-256: {sha256(message)}")
-    print(f"HMAC-SHA1: {hmac_sha1(key, message)}")
-
-
-if __name__ == "__main__":
-    demo()

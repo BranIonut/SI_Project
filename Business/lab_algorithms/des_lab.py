@@ -1,7 +1,3 @@
-# des_lab.py
-# DES educational implementation based on the laboratory code.
-# Not recommended for production security.
-
 from typing import List, Tuple
 
 BitList = List[str]
@@ -175,26 +171,6 @@ def bits_to_bytes(bit_list: BitList) -> bytes:
     return bytes(int(bit_string[i:i + 8], 2) for i in range(0, len(bit_string), 8))
 
 
-def text_to_64bits(text: str) -> BitList:
-    text = text.ljust(8, " ")[:8]
-    return bytes_to_bits(text.encode("latin1", errors="replace"))
-
-
-def bits_to_hex(bit_list: BitList) -> str:
-    return f"{int(''.join(bit_list), 2):016X}"
-
-
-def hex_to_bits(hex_string: str) -> BitList:
-    hex_string = hex_string.strip()
-    if len(hex_string) != 16:
-        raise ValueError("DES hex block must have exactly 16 hex characters.")
-    return list(f"{int(hex_string, 16):064b}")
-
-
-def bits_to_text(bit_list: BitList) -> str:
-    return bits_to_bytes(bit_list).decode("latin1", errors="replace")
-
-
 def pkcs7_pad(data: bytes, block_size: int = 8) -> bytes:
     padding_len = block_size - (len(data) % block_size)
     return data + bytes([padding_len] * padding_len)
@@ -215,11 +191,6 @@ def pkcs7_unpad(data: bytes, block_size: int = 8) -> bytes:
 
 
 def encrypt_bytes(data: bytes, key: bytes) -> bytes:
-    """
-    Educational DES ECB-style encryption.
-    Uses PKCS#7 padding to support files/messages with arbitrary length.
-    Key is reduced/padded to 8 bytes, same idea as the original lab code.
-    """
     key = key.ljust(8, b" ")[:8]
     subkeys = generate_subkeys(bytes_to_bits(key))
 
@@ -269,25 +240,3 @@ def decrypt_file(input_path: str, output_path: str, key: bytes) -> None:
 
     with open(output_path, "wb") as f:
         f.write(decrypted)
-
-
-def demo() -> None:
-    key_text = input("key 8 chars: ")
-    plaintext = input("text 8 chars: ")
-
-    key_bits = text_to_64bits(key_text)
-    data_bits = text_to_64bits(plaintext)
-
-    subkeys = generate_subkeys(key_bits)
-
-    ciphertext_bits = encrypt_block(data_bits, subkeys)
-    hex_output = bits_to_hex(ciphertext_bits)
-    print(f"\nencrypted output: {hex_output}")
-
-    decrypted_bits = decrypt_block(hex_to_bits(hex_output), subkeys)
-    final_text = bits_to_text(decrypted_bits)
-    print(f"decrypted output: {final_text}")
-
-
-if __name__ == "__main__":
-    demo()

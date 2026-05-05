@@ -1,7 +1,3 @@
-# base64_lab.py
-# Base64 educational implementation based on the laboratory code.
-# Base64 is encoding, not encryption.
-
 BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 
@@ -79,16 +75,3 @@ def decode_file_from_base64(input_path: str, output_path: str) -> None:
 
     with open(output_path, "wb") as f:
         f.write(decoded)
-
-
-def demo() -> None:
-    text = input("Input: ")
-    encoded = encode_base64(text)
-    print("base64 encoded:", encoded)
-
-    decoded = decode_base64(encoded)
-    print("decoded text:", decoded)
-
-
-if __name__ == "__main__":
-    demo()

@@ -1,7 +1,3 @@
-# signature_pki_lab.py
-# Educational digital signature and minimal PKI simulation.
-# Uses SHA-256 + textbook RSA from the lab.
-
 import time
 from dataclasses import dataclass
 
@@ -168,22 +164,3 @@ class PKISystem:
         decrypted_hash = power_modular(signed_doc.s, e_pub, n_pub)
 
         return current_hash == decrypted_hash
-
-
-def demo() -> None:
-    n, e, d = 3233, 17, 413
-
-    ca = CertificateAuthority("GlobalRootCA")
-    user_cert = ca.issue_certificate("User1", (n, e))
-
-    pki = PKISystem(n, e, d)
-    doc = pki.create_signed_doc("Confidential Data")
-
-    result = pki.verify_with_cert(doc, user_cert)
-
-    print(f"Verification using CA certificate: {result}")
-    print(f"Document signed at timestamp: {doc.timestamp}")
-
-
-if __name__ == "__main__":
-    demo()

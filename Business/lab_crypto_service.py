@@ -34,10 +34,6 @@ class LabCryptoService:
             raise CryptoServiceError(f"RSA-LAB decryption failed: {exc}") from exc
 
     @staticmethod
-    def sha1_file(path):
-        return hash_lab.sha1_file(path)
-
-    @staticmethod
     def sha256_file(path):
         return hash_lab.sha256_file(path)
 

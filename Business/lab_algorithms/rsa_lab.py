@@ -1,8 +1,3 @@
-# rsa_lab.py
-# Educational RSA implementation based on the laboratory code.
-# This is textbook RSA, useful for demonstration.
-# For real file encryption, keep OpenSSL / hybrid RSA-AES in the main project.
-
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,10 +36,6 @@ class RSAKeyPair:
 
 
 def generate_demo_key_pair(p: int = 61, q: int = 53, e: int = 17) -> RSAKeyPair:
-    """
-    Generates a small educational RSA key pair.
-    p and q must be prime.
-    """
     if p == q:
         raise ValueError("p and q must be different primes.")
 
@@ -74,10 +65,6 @@ def rsa_decrypt_number(cipher_number: int, d: int, n: int) -> int:
 
 
 def rsa_encrypt_bytes(data: bytes, e: int, n: int) -> list[int]:
-    """
-    Encrypts byte-by-byte, like the lab file version.
-    Works only if each byte value is smaller than n.
-    """
     if n <= 255:
         raise ValueError("n must be greater than 255 for byte-by-byte encryption.")
 
@@ -131,24 +118,3 @@ def rsa_decrypt_file(input_filename: str, output_filename: str, d: int, n: int) 
 
     with output_path.open("wb") as f_out:
         f_out.write(decrypted)
-
-
-def demo() -> None:
-    key_pair = generate_demo_key_pair()
-
-    input_file = "plaintext.txt"
-    encrypted_file = "encrypted.txt"
-    decrypted_file = "decrypted.txt"
-
-    with open(input_file, "w", encoding="utf-8") as f:
-        f.write("Hello")
-
-    rsa_encrypt_file(input_file, encrypted_file, key_pair.e, key_pair.n)
-    rsa_decrypt_file(encrypted_file, decrypted_file, key_pair.d, key_pair.n)
-
-    with open(decrypted_file, "r", encoding="utf-8") as f:
-        print(f.read())
-
-
-if __name__ == "__main__":
-    demo()
