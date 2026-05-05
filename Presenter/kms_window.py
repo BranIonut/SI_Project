@@ -203,13 +203,13 @@ class KMSWindow(QWidget):
 
         self.btn_prev_compatible_keys_page = QPushButton("Prev Keys")
         self.btn_prev_compatible_keys_page.setObjectName("neutralButton")
-        self.btn_prev_compatible_keys_page.setFixedHeight(18)
+        self.btn_prev_compatible_keys_page.setFixedHeight(32)
 
         self.btn_prev_compatible_keys_page.clicked.connect(self.prev_compatible_keys_page)
 
         self.btn_next_compatible_keys_page = QPushButton("Next Keys")
         self.btn_next_compatible_keys_page.setObjectName("neutralButton")
-        self.btn_next_compatible_keys_page.setFixedHeight(18)
+        self.btn_next_compatible_keys_page.setFixedHeight(32)
         self.btn_next_compatible_keys_page.clicked.connect(self.next_compatible_keys_page)
 
         self.compatible_keys_page_size_combo = self._combo()
