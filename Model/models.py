@@ -192,14 +192,14 @@ def seed_defaults():
             "display_name": "Python cryptography",
             "type": "Python library",
             "version": None,
-            "description": "AES/RSA implementation using the Python cryptography library.",
+            "description": "Real cryptographic framework implemented using the Python cryptography library. Used as an alternative to OpenSSL for performance comparison.",
         },
         {
             "name": "Custom Educational",
             "display_name": "Custom Educational",
             "type": "Legacy / educational Python implementation",
             "version": None,
-            "description": "Educational cipher, not standard AES/DES.",
+            "description": "Educational implementation for demonstration and comparison. It is not a standard AES/DES implementation and should not be considered production-grade cryptography.",
         },
     )
 
@@ -211,14 +211,14 @@ def seed_defaults():
         legacy_custom.name = "Custom Educational"
         legacy_custom.display_name = "Custom Educational"
         legacy_custom.type = "Legacy / educational Python implementation"
-        legacy_custom.description = "Educational cipher, not standard AES/DES."
+        legacy_custom.description = "Educational implementation for demonstration and comparison. It is not a standard AES/DES implementation and should not be considered production-grade cryptography."
         educational = legacy_custom
 
     if legacy_cryptography and legacy_cryptography.type == "Custom Python implementation":
         legacy_cryptography.name = "Custom Educational"
         legacy_cryptography.display_name = "Custom Educational"
         legacy_cryptography.type = "Legacy / educational Python implementation"
-        legacy_cryptography.description = "Educational cipher, not standard AES/DES."
+        legacy_cryptography.description = "Educational implementation for demonstration and comparison. It is not a standard AES/DES implementation and should not be considered production-grade cryptography."
         educational = legacy_cryptography
 
     for item in framework_defaults:
@@ -246,7 +246,7 @@ def seed_defaults():
             "type": "symmetric",
             "mode": "GCM",
             "key_size": 256,
-            "description": "AES-256-GCM authenticated encryption for Python cryptography.",
+            "description": "Authenticated symmetric encryption using AES with 256-bit keys in GCM mode.",
         },
         {
             "name": "DES-CBC",

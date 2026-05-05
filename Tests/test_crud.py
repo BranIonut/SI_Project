@@ -2,6 +2,8 @@ import hashlib
 import os
 import shutil
 import uuid
+import base64
+import json
 
 import pytest
 from sqlalchemy import inspect
@@ -335,6 +337,31 @@ def test_cryptography_framework_exists_after_seed():
         framework = FrameworkRepository.get_by_name("Cryptography")
     assert framework is not None
     assert framework.display_name == "Python cryptography"
+    assert (
+        framework.description
+        == "Real cryptographic framework implemented using the Python cryptography library. Used as an alternative to OpenSSL for performance comparison."
+    )
+
+
+def test_aes_256_gcm_algorithm_exists_after_seed():
+    with app.app_context():
+        algorithm = AlgorithmRepository.get_by_name("AES-256-GCM")
+    assert algorithm is not None
+    assert algorithm.type == "symmetric"
+    assert algorithm.mode == "GCM"
+    assert algorithm.description == "Authenticated symmetric encryption using AES with 256-bit keys in GCM mode."
+
+
+def test_cryptography_aes_key_generation_stores_base64_32_byte_key():
+    with app.app_context():
+        framework = FrameworkRepository.get_by_name("Cryptography")
+        algorithm = AlgorithmRepository.get_by_name("AES-256-GCM")
+        key_record = KeyManagementService.generate_key(unique_name("crypto_gcm_key"), algorithm, framework)
+        stored = KeyRepository.get_by_id(key_record.id)
+
+    decoded_key = base64.b64decode(stored.key_value.encode("utf-8"))
+    assert len(decoded_key) == 32
+    assert base64.b64encode(decoded_key).decode("utf-8") == stored.key_value
 
 
 def test_cryptography_aes_cbc_encrypt_decrypt_hash_matches(sandbox_dir):
@@ -360,6 +387,66 @@ def test_cryptography_aes_gcm_encrypt_decrypt_hash_matches(sandbox_dir):
     assert refreshed_file.original_hash == refreshed_file.decrypted_hash
     assert encrypt_op.iv_nonce is not None
     assert encrypt_op.auth_tag is not None
+    metadata = json.loads(encrypt_op.operation_metadata_json)
+    assert metadata["framework"] == "Cryptography"
+    assert metadata["algorithm"] == "AES-256-GCM"
+    assert metadata["mode"] == "GCM"
+    assert metadata["nonce_b64"] == encrypt_op.iv_nonce
+    assert metadata["auth_tag_b64"] == encrypt_op.auth_tag
+
+
+def test_cryptography_aes_gcm_wrong_key_fails_clearly(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "crypto_wrong_key.txt", b"wrong key gcm content")
+    with app.app_context():
+        framework = FrameworkRepository.get_by_name("Cryptography")
+        algorithm = AlgorithmRepository.get_by_name("AES-256-GCM")
+        managed_file = FileManagementService.register_file(input_path)
+        correct_key = KeyManagementService.generate_key(unique_name("crypto_gcm_ok"), algorithm, framework)
+        wrong_key = KeyManagementService.generate_key(unique_name("crypto_gcm_bad"), algorithm, framework)
+        encrypted = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, correct_key)
+        with pytest.raises(CryptoServiceError, match="AES-GCM integrity verification failed"):
+            CryptoManagerService.decrypt_file(encrypted.managed_file, algorithm, framework, wrong_key)
+
+
+def test_cryptography_aes_gcm_tampered_ciphertext_fails_authentication(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "crypto_tamper.txt", b"tamper detection for aes gcm")
+    with app.app_context():
+        framework = FrameworkRepository.get_by_name("Cryptography")
+        algorithm = AlgorithmRepository.get_by_name("AES-256-GCM")
+        managed_file = FileManagementService.register_file(input_path)
+        key_record = KeyManagementService.generate_key(unique_name("crypto_gcm_tamper"), algorithm, framework)
+        encrypted = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
+
+        with open(encrypted.output_path, "rb") as encrypted_file:
+            ciphertext = bytearray(encrypted_file.read())
+        ciphertext[0] ^= 0x01
+        with open(encrypted.output_path, "wb") as encrypted_file:
+            encrypted_file.write(ciphertext)
+
+        refreshed_file = FileRepository.get_by_id(managed_file.id)
+        with pytest.raises(CryptoServiceError, match="AES-GCM integrity verification failed"):
+            CryptoManagerService.decrypt_file(refreshed_file, algorithm, framework, key_record)
+
+
+def test_cryptography_operations_create_performance_records(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "crypto_perf.txt", b"cryptography perf test" * 32)
+    with app.app_context():
+        framework = FrameworkRepository.get_by_name("Cryptography")
+        algorithm = AlgorithmRepository.get_by_name("AES-256-GCM")
+        managed_file = FileManagementService.register_file(input_path)
+        key_record = KeyManagementService.generate_key(unique_name("crypto_gcm_perf"), algorithm, framework)
+        encrypted = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
+        decrypted = CryptoManagerService.decrypt_file(encrypted.managed_file, algorithm, framework, key_record)
+        encrypt_performance = PerformanceRepository.get_by_operation_id(encrypted.operation.id)
+        decrypt_performance = PerformanceRepository.get_by_operation_id(decrypted.operation.id)
+
+    assert encrypt_performance is not None
+    assert decrypt_performance is not None
+    for performance in (encrypt_performance, decrypt_performance):
+        assert performance.execution_time_ms >= 0
+        assert performance.memory_usage_mb >= 0
+        assert performance.input_size_bytes > 0
+        assert performance.output_size_bytes > 0
 
 
 def test_sha256_hash_correctness(sandbox_dir):

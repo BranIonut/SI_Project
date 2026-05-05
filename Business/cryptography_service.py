@@ -1,4 +1,5 @@
 import base64
+import json
 import os
 import secrets
 
@@ -17,6 +18,21 @@ class CryptographyCryptoService:
     GCM_NONCE_SIZE = 12
     GCM_TAG_SIZE = 16
     RSA_DIRECT_MAX_BYTES = 190
+
+    @staticmethod
+    def _build_operation_metadata_payload(algorithm_name, mode, nonce_b64=None, tag_b64=None, extra=None):
+        payload = {
+            "framework": "Cryptography",
+            "algorithm": algorithm_name,
+            "mode": mode,
+        }
+        if nonce_b64 is not None:
+            payload["nonce_b64"] = nonce_b64
+        if tag_b64 is not None:
+            payload["auth_tag_b64"] = tag_b64
+        if extra:
+            payload.update(extra)
+        return json.dumps(payload, sort_keys=True)
 
     @staticmethod
     def generate_symmetric_key(size_bytes):
@@ -71,7 +87,13 @@ class CryptographyCryptoService:
             "iv_nonce": base64.b64encode(iv).decode("utf-8"),
             "auth_tag": base64.b64encode(mac).decode("utf-8"),
             "data_encryption_algorithm": "AES-256-CBC",
-            "operation_metadata_json": '{"integrity":"HMAC-SHA256"}',
+            "operation_metadata_json": cls._build_operation_metadata_payload(
+                "AES-256-CBC",
+                "CBC",
+                nonce_b64=base64.b64encode(iv).decode("utf-8"),
+                tag_b64=base64.b64encode(mac).decode("utf-8"),
+                extra={"integrity": "HMAC-SHA256"},
+            ),
         }
 
     @classmethod
@@ -110,7 +132,13 @@ class CryptographyCryptoService:
             "iv_nonce": base64.b64encode(iv).decode("utf-8"),
             "auth_tag": base64.b64encode(mac).decode("utf-8"),
             "data_encryption_algorithm": "AES-256-CBC",
-            "operation_metadata_json": '{"integrity":"HMAC-SHA256"}',
+            "operation_metadata_json": cls._build_operation_metadata_payload(
+                "AES-256-CBC",
+                "CBC",
+                nonce_b64=base64.b64encode(iv).decode("utf-8"),
+                tag_b64=base64.b64encode(mac).decode("utf-8"),
+                extra={"integrity": "HMAC-SHA256"},
+            ),
         }
 
     @classmethod
@@ -130,7 +158,13 @@ class CryptographyCryptoService:
             "iv_nonce": base64.b64encode(nonce).decode("utf-8"),
             "auth_tag": base64.b64encode(tag).decode("utf-8"),
             "data_encryption_algorithm": "AES-256-GCM",
-            "operation_metadata_json": '{"integrity":"GCM tag"}',
+            "operation_metadata_json": cls._build_operation_metadata_payload(
+                "AES-256-GCM",
+                "GCM",
+                nonce_b64=base64.b64encode(nonce).decode("utf-8"),
+                tag_b64=base64.b64encode(tag).decode("utf-8"),
+                extra={"integrity": "GCM tag"},
+            ),
         }
 
     @classmethod
@@ -153,7 +187,13 @@ class CryptographyCryptoService:
             "iv_nonce": nonce_b64,
             "auth_tag": tag_b64,
             "data_encryption_algorithm": "AES-256-GCM",
-            "operation_metadata_json": '{"integrity":"GCM tag"}',
+            "operation_metadata_json": cls._build_operation_metadata_payload(
+                "AES-256-GCM",
+                "GCM",
+                nonce_b64=nonce_b64,
+                tag_b64=tag_b64,
+                extra={"integrity": "GCM tag"},
+            ),
         }
 
     @classmethod

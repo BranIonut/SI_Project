@@ -1017,6 +1017,8 @@ class KMSWindow(QWidget):
 
         self.status_label.setText(
             f"{result.message}\n\n"
+            f"Framework: {framework.display_name or framework.name}\n"
+            f"Algorithm: {algorithm.name}\n"
             f"Output: {result.output_path}\n"
             f"Integrity: {integrity_status}\n"
             f"{performance_summary}"
@@ -1027,6 +1029,8 @@ class KMSWindow(QWidget):
             "Operation Complete",
             (
                 f"{result.message}\n\n"
+                f"Framework: {framework.display_name or framework.name}\n"
+                f"Algorithm: {algorithm.name}\n\n"
                 f"Output path:\n{result.output_path}\n\n"
                 f"Integrity: {integrity_status}\n\n"
                 f"{performance_summary}"
