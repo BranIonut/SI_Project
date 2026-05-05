@@ -245,13 +245,6 @@ def seed_defaults():
             "version": None,
             "description": "Educational implementations based on the cryptography laboratory code. Used as an alternative framework for learning and performance comparison with OpenSSL. Not production-grade.",
         },
-        {
-            "name": FRAMEWORK_CUSTOM_LEGACY,
-            "display_name": FRAMEWORK_CUSTOM_LEGACY,
-            "type": "Legacy / educational Python implementation",
-            "version": None,
-            "description": "Legacy educational implementation kept for backwards compatibility. Not part of the main encryption workflow and not production-grade.",
-        },
     )
 
     _normalize_legacy_custom_framework()
@@ -303,41 +296,6 @@ def seed_defaults():
             "mode": "Textbook RSA",
             "key_size": 0,
             "description": "Textbook RSA implementation from laboratory code, educational only.",
-        },
-        {
-            "name": "SHA-1-LAB",
-            "type": "hash",
-            "mode": "SHA-1",
-            "key_size": 160,
-            "description": "SHA-1 implementation from laboratory code. Educational only.",
-        },
-        {
-            "name": "SHA-256-LAB",
-            "type": "hash",
-            "mode": "SHA-256",
-            "key_size": 256,
-            "description": "SHA-256 implementation from laboratory code for file integrity checks.",
-        },
-        {
-            "name": "HMAC-SHA1-LAB",
-            "type": "mac",
-            "mode": "HMAC-SHA1",
-            "key_size": 160,
-            "description": "HMAC using SHA-1 from laboratory code.",
-        },
-        {
-            "name": "BASE64-LAB",
-            "type": "encoding",
-            "mode": "Base64",
-            "key_size": 0,
-            "description": "Base64 implementation from laboratory code for encoding keys in the database. Encoding, not encryption.",
-        },
-        {
-            "name": "DIGITAL-SIGNATURE-LAB",
-            "type": "signature",
-            "mode": "SHA-256 + RSA",
-            "key_size": 256,
-            "description": "Digital signature using SHA-256 + textbook RSA, with minimal PKI simulation.",
         },
     )
     for item in defaults:

@@ -138,20 +138,17 @@ def test_default_frameworks_and_algorithms_exist():
         algorithms = {algorithm.name for algorithm in AlgorithmRepository.get_all()}
         lab_framework = FrameworkRepository.get_by_name("Lab Educational")
         cryptography_framework = FrameworkRepository.get_by_name("Cryptography")
-    assert {"OpenSSL", "Cryptography", "Lab Educational", "Custom Educational / Legacy"}.issubset(frameworks)
-    assert {
+        legacy_framework = FrameworkRepository.get_by_name("Custom Educational / Legacy")
+    assert frameworks == {"OpenSSL", "Cryptography", "Lab Educational"}
+    assert algorithms == {
         "AES-256-CBC",
         "AES-256-GCM",
         "DES-CBC",
         "RSA-2048",
         "DES-LAB",
         "RSA-LAB",
-        "SHA-1-LAB",
-        "SHA-256-LAB",
-        "HMAC-SHA1-LAB",
-        "BASE64-LAB",
-        "DIGITAL-SIGNATURE-LAB",
-    }.issubset(algorithms)
+    }
+    assert legacy_framework is None
     assert "performance comparison with OpenSSL" in lab_framework.description
     assert cryptography_framework.display_name == "Python cryptography"
 
@@ -320,6 +317,24 @@ def test_aes_openssl_encrypt_decrypt_roundtrip(sandbox_dir):
     assert os.path.exists(decrypt_result.output_path)
     assert refreshed_file.original_hash == refreshed_file.decrypted_hash
     assert refreshed_file.integrity_verified is True
+
+
+def test_des_openssl_encrypt_decrypt_roundtrip(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "openssl_des.txt", b"OpenSSL DES test content")
+    with app.app_context():
+        _, encrypt_result, decrypt_result, refreshed_file = roundtrip(
+            "DES-CBC",
+            "OpenSSL",
+            input_path,
+            unique_name("openssl_des_key"),
+        )
+        encrypt_perf = PerformanceRepository.get_by_operation_id(encrypt_result.operation.id)
+        decrypt_perf = PerformanceRepository.get_by_operation_id(decrypt_result.operation.id)
+    assert os.path.exists(decrypt_result.output_path)
+    assert refreshed_file.original_hash == refreshed_file.decrypted_hash
+    assert refreshed_file.integrity_verified is True
+    assert encrypt_perf is not None
+    assert decrypt_perf is not None
 
 
 def test_aes_cryptography_cbc_encrypt_decrypt_roundtrip(sandbox_dir):

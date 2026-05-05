@@ -66,12 +66,6 @@ class CryptoManagerService:
     def is_framework_supported_for_algorithm(cls, framework_name, algorithm_name):
         return framework_name in cls.supported_framework_names_for_algorithm(algorithm_name)
 
-    @classmethod
-    def is_key_compatible_with_algorithm(cls, key_record, algorithm):
-        if algorithm.type == "hybrid":
-            return key_record.key_type in {"keypair", "public", "private"} and getattr(key_record.algorithm, "name", None) == ALGORITHM_RSA_2048
-        return key_record.algorithm_id == algorithm.id
-
     @staticmethod
     def validate_combination(algorithm, key_record, operation_type, framework=None):
         if framework and not CryptoManagerService.is_framework_supported_for_algorithm(framework.name, algorithm.name):

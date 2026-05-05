@@ -48,15 +48,6 @@ class KeyRepository:
         )
 
     @staticmethod
-    def get_active():
-        return (
-            Key.query.options(joinedload(Key.algorithm), joinedload(Key.framework))
-            .filter_by(is_active=True)
-            .order_by(Key.created_at.desc(), Key.id.desc())
-            .all()
-        )
-
-    @staticmethod
     def count_keys():
         return Key.query.count()
 

@@ -10,7 +10,7 @@ from Model.models import BASE_DIR, utc_now
 
 try:
     import psutil
-except ImportError:  # pragma: no cover
+except ImportError:
     psutil = None
 
 
