@@ -20,6 +20,7 @@ except ImportError:  # pragma: no cover
 
 from Business.cryptography_service import CryptographyCryptoService
 from Business.errors import CryptoServiceError
+from Business.lab_crypto_service import LabCryptoService
 from Model.models import BASE_DIR, utc_now
 from Repositories.file_repo import FileRepository
 from Repositories.key_repo import KeyRepository
@@ -56,6 +57,10 @@ class HashService:
             for chunk in iter(lambda: file_handle.read(8192), b""):
                 digest.update(chunk)
         return digest.hexdigest()
+
+    @staticmethod
+    def sha256_lab_for_file(file_path):
+        return LabCryptoService.sha256_file(file_path)
 
 
 class RuntimePaths:
@@ -354,12 +359,28 @@ class KeyManagementService:
                 if framework_name == "openssl"
                 else CustomPythonService.generate_symmetric_key(8)
             )
+            if framework_name == "lab educational":
+                key_bytes = CustomPythonService.generate_symmetric_key(8)
             return KeyRepository.create(
                 name=name,
                 algorithm_id=algorithm.id,
                 framework_id=framework.id,
                 key_type="symmetric",
                 key_value=base64.b64encode(key_bytes).decode("utf-8"),
+            )
+
+        if algorithm_name == "RSA-LAB":
+            demo_key = {
+                "n": 3233,
+                "e": 17,
+                "d": 413,
+            }
+            return KeyRepository.create(
+                name=name,
+                algorithm_id=algorithm.id,
+                framework_id=framework.id,
+                key_type="keypair",
+                key_value=json.dumps(demo_key, sort_keys=True),
             )
 
         if algorithm_name.startswith("RSA") or algorithm_name.startswith("HYBRID"):
@@ -441,10 +462,12 @@ class CryptoManagerService:
         "AES-256-CBC": {"OpenSSL", "Cryptography", "Custom Educational"},
         "AES-256-GCM": {"Cryptography"},
         "DES-CBC": {"OpenSSL", "Custom Educational"},
+        "DES-LAB": {"Lab Educational"},
     }
     ASYMMETRIC_FRAMEWORK_MAP = {
         "RSA-2048": {"OpenSSL", "Cryptography"},
         "Hybrid RSA-AES": {"Cryptography"},
+        "RSA-LAB": {"Lab Educational"},
     }
 
     @classmethod
@@ -490,6 +513,9 @@ class CryptoManagerService:
             raise CryptoServiceError("Symmetric operations require a symmetric key.")
         if algorithm.type == "asymmetric" and key_record.key_type not in {"keypair", "public", "private"}:
             raise CryptoServiceError("RSA operations require a public/private key pair.")
+        if algorithm.name == "RSA-LAB":
+            LabCryptoService.parse_rsa_key_material(key_record)
+            return
         if operation_type == "decrypt" and algorithm.type in {"asymmetric", "hybrid"} and not key_record.private_key_value:
             raise CryptoServiceError("Decryption requires a private key.")
 
@@ -549,6 +575,11 @@ class CryptoManagerService:
                 CustomPythonService.encrypt_des_cbc(input_path, output_path, key_bytes)
             else:
                 raise CryptoServiceError(f"Unsupported Custom Educational algorithm: {algorithm_name}")
+        elif framework_name == "Lab Educational":
+            if algorithm_name == "DES-LAB":
+                LabCryptoService.encrypt_des_file(input_path, output_path, key_bytes)
+            else:
+                raise CryptoServiceError(f"Unsupported Lab Educational algorithm: {algorithm_name}")
         else:
             raise CryptoServiceError(f"Unsupported framework: {framework_name}")
         return metadata
@@ -585,6 +616,11 @@ class CryptoManagerService:
                 CustomPythonService.decrypt_des_cbc(input_path, output_path, key_bytes)
             else:
                 raise CryptoServiceError(f"Unsupported Custom Educational algorithm: {algorithm_name}")
+        elif framework_name == "Lab Educational":
+            if algorithm_name == "DES-LAB":
+                LabCryptoService.decrypt_des_file(input_path, output_path, key_bytes)
+            else:
+                raise CryptoServiceError(f"Unsupported Lab Educational algorithm: {algorithm_name}")
         else:
             raise CryptoServiceError(f"Unsupported framework: {framework_name}")
         return metadata
@@ -644,6 +680,16 @@ class CryptoManagerService:
                     metadata = {
                         "key_wrap_algorithm": "RSA-OAEP-SHA256",
                         "data_encryption_algorithm": "RSA-2048",
+                    }
+                elif algorithm.name == "RSA-LAB":
+                    n, e, _ = LabCryptoService.parse_rsa_key_material(key_record)
+                    LabCryptoService.rsa_encrypt_file(managed_file.original_path, output_path, e, n)
+                    metadata = {
+                        "data_encryption_algorithm": "RSA-LAB",
+                        "operation_metadata_json": json.dumps(
+                            {"framework": "Lab Educational", "algorithm": "RSA-LAB", "mode": "Textbook RSA"},
+                            sort_keys=True,
+                        ),
                     }
                 elif algorithm.name == "Hybrid RSA-AES":
                     if framework.name != "Cryptography":
@@ -719,6 +765,16 @@ class CryptoManagerService:
                         )
                     else:
                         raise CryptoServiceError("RSA decryption is not supported by the legacy custom framework.")
+                elif algorithm.name == "RSA-LAB":
+                    n, _, d = LabCryptoService.parse_rsa_key_material(key_record)
+                    LabCryptoService.rsa_decrypt_file(managed_file.encrypted_path, output_path, d, n)
+                    metadata = {
+                        "data_encryption_algorithm": "RSA-LAB",
+                        "operation_metadata_json": json.dumps(
+                            {"framework": "Lab Educational", "algorithm": "RSA-LAB", "mode": "Textbook RSA"},
+                            sort_keys=True,
+                        ),
+                    }
                 elif algorithm.name == "Hybrid RSA-AES":
                     if framework.name != "Cryptography":
                         raise CryptoServiceError("Hybrid RSA-AES is currently supported with the Cryptography framework.")

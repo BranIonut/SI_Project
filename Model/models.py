@@ -201,6 +201,13 @@ def seed_defaults():
             "version": None,
             "description": "Educational implementation for demonstration and comparison. It is not a standard AES/DES implementation and should not be considered production-grade cryptography.",
         },
+        {
+            "name": "Lab Educational",
+            "display_name": "Lab Educational",
+            "type": "Laboratory / educational algorithms",
+            "version": None,
+            "description": "Educational implementations from the cryptography laboratories: DES, RSA, SHA, HMAC, Base64 and minimal PKI. These are for learning and comparison, not production security.",
+        },
     )
 
     legacy_custom = Framework.query.filter_by(name="Custom").first()
@@ -268,6 +275,55 @@ def seed_defaults():
             "mode": "RSA-OAEP + AES-256-GCM",
             "key_size": 2048,
             "description": "Hybrid encryption for large files using RSA-OAEP and AES-256-GCM.",
+        },
+        {
+            "name": "DES-LAB",
+            "type": "symmetric",
+            "mode": "ECB / PKCS7",
+            "key_size": 64,
+            "description": "DES implementation based on the laboratory code. Educational only.",
+        },
+        {
+            "name": "RSA-LAB",
+            "type": "asymmetric",
+            "mode": "Textbook RSA",
+            "key_size": 12,
+            "description": "Textbook RSA implementation based on the laboratory code. Educational only.",
+        },
+        {
+            "name": "SHA-1-LAB",
+            "type": "hash",
+            "mode": "SHA-1",
+            "key_size": 160,
+            "description": "SHA-1 implementation from laboratory code. Educational only.",
+        },
+        {
+            "name": "SHA-256-LAB",
+            "type": "hash",
+            "mode": "SHA-256",
+            "key_size": 256,
+            "description": "SHA-256 implementation from laboratory code.",
+        },
+        {
+            "name": "HMAC-SHA1-LAB",
+            "type": "mac",
+            "mode": "HMAC-SHA1",
+            "key_size": 160,
+            "description": "HMAC using SHA-1 from laboratory code.",
+        },
+        {
+            "name": "BASE64-LAB",
+            "type": "encoding",
+            "mode": "Base64",
+            "key_size": 0,
+            "description": "Base64 encoder/decoder from laboratory code. Encoding, not encryption.",
+        },
+        {
+            "name": "DIGITAL-SIGNATURE-LAB",
+            "type": "signature",
+            "mode": "SHA-256 + RSA",
+            "key_size": 256,
+            "description": "Digital signature using SHA-256 + textbook RSA, with minimal PKI simulation.",
         },
     )
     for item in defaults:

@@ -118,8 +118,21 @@ def test_default_frameworks_and_algorithms_exist():
         frameworks = {framework.name for framework in FrameworkRepository.get_all()}
         algorithms = {algorithm.name for algorithm in AlgorithmRepository.get_all()}
         cryptography_fw = FrameworkRepository.get_by_name("Cryptography")
-    assert frameworks == {"OpenSSL", "Cryptography", "Custom Educational"}
-    assert {"AES-256-CBC", "AES-256-GCM", "DES-CBC", "RSA-2048", "Hybrid RSA-AES"}.issubset(algorithms)
+    assert {"OpenSSL", "Cryptography", "Custom Educational", "Lab Educational"}.issubset(frameworks)
+    assert {
+        "AES-256-CBC",
+        "AES-256-GCM",
+        "DES-CBC",
+        "RSA-2048",
+        "Hybrid RSA-AES",
+        "DES-LAB",
+        "RSA-LAB",
+        "SHA-1-LAB",
+        "SHA-256-LAB",
+        "HMAC-SHA1-LAB",
+        "BASE64-LAB",
+        "DIGITAL-SIGNATURE-LAB",
+    }.issubset(algorithms)
     assert cryptography_fw.display_name == "Python cryptography"
 
 
