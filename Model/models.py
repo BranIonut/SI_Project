@@ -185,48 +185,50 @@ def seed_defaults():
             "display_name": "OpenSSL",
             "type": "CLI / subprocess",
             "version": None,
-            "description": "AES and RSA operations backed by the OpenSSL command line tool.",
+            "description": "Required cryptographic framework used through subprocess calls for file encryption and decryption.",
         },
         {
             "name": "Cryptography",
             "display_name": "Python cryptography",
             "type": "Python library",
             "version": None,
-            "description": "Real cryptographic framework implemented using the Python cryptography library. Used as an alternative to OpenSSL for performance comparison.",
-        },
-        {
-            "name": "Custom Educational",
-            "display_name": "Custom Educational",
-            "type": "Legacy / educational Python implementation",
-            "version": None,
-            "description": "Educational implementation for demonstration and comparison. It is not a standard AES/DES implementation and should not be considered production-grade cryptography.",
+            "description": "Real Python cryptography framework used as an alternative to OpenSSL for encryption/decryption and performance comparison.",
         },
         {
             "name": "Lab Educational",
             "display_name": "Lab Educational",
             "type": "Laboratory / educational algorithms",
             "version": None,
-            "description": "Educational implementations from the cryptography laboratories: DES, RSA, SHA, HMAC, Base64 and minimal PKI. These are for learning and comparison, not production security.",
+            "description": "Educational implementations based on the cryptography laboratory code. Used as an alternative framework for learning and performance comparison with OpenSSL. Not production-grade.",
+        },
+        {
+            "name": "Custom Educational / Legacy",
+            "display_name": "Custom Educational / Legacy",
+            "type": "Legacy / educational Python implementation",
+            "version": None,
+            "description": "Legacy educational implementation kept for backwards compatibility. Not part of the main encryption workflow and not production-grade.",
         },
     )
 
     legacy_custom = Framework.query.filter_by(name="Custom").first()
-    legacy_cryptography = Framework.query.filter_by(name="Cryptography").first()
-    educational = Framework.query.filter_by(name="Custom Educational").first()
+    educational = (
+        Framework.query.filter_by(name="Custom Educational / Legacy").first()
+        or Framework.query.filter_by(name="Custom Educational").first()
+    )
 
     if legacy_custom and not educational:
-        legacy_custom.name = "Custom Educational"
-        legacy_custom.display_name = "Custom Educational"
+        legacy_custom.name = "Custom Educational / Legacy"
+        legacy_custom.display_name = "Custom Educational / Legacy"
         legacy_custom.type = "Legacy / educational Python implementation"
-        legacy_custom.description = "Educational implementation for demonstration and comparison. It is not a standard AES/DES implementation and should not be considered production-grade cryptography."
+        legacy_custom.description = "Legacy educational implementation kept for backwards compatibility. Not part of the main encryption workflow and not production-grade."
         educational = legacy_custom
 
-    if legacy_cryptography and legacy_cryptography.type == "Custom Python implementation":
-        legacy_cryptography.name = "Custom Educational"
-        legacy_cryptography.display_name = "Custom Educational"
-        legacy_cryptography.type = "Legacy / educational Python implementation"
-        legacy_cryptography.description = "Educational implementation for demonstration and comparison. It is not a standard AES/DES implementation and should not be considered production-grade cryptography."
-        educational = legacy_cryptography
+    legacy_plain_custom = Framework.query.filter_by(name="Custom Educational").first()
+    if legacy_plain_custom and legacy_plain_custom.name != "Custom Educational / Legacy":
+        legacy_plain_custom.name = "Custom Educational / Legacy"
+        legacy_plain_custom.display_name = "Custom Educational / Legacy"
+        legacy_plain_custom.type = "Legacy / educational Python implementation"
+        legacy_plain_custom.description = "Legacy educational implementation kept for backwards compatibility. Not part of the main encryption workflow and not production-grade."
 
     for item in framework_defaults:
         framework = Framework.query.filter_by(name=item["name"]).first()
@@ -246,49 +248,42 @@ def seed_defaults():
             "type": "symmetric",
             "mode": "CBC",
             "key_size": 256,
-            "description": "AES-256-CBC file encryption for OpenSSL and Python cryptography comparisons.",
+            "description": "AES-256-CBC file encryption through OpenSSL and Python cryptography.",
         },
         {
             "name": "AES-256-GCM",
             "type": "symmetric",
             "mode": "GCM",
             "key_size": 256,
-            "description": "Authenticated symmetric encryption using AES with 256-bit keys in GCM mode.",
+            "description": "Authenticated AES encryption using Python cryptography.",
         },
         {
             "name": "DES-CBC",
             "type": "symmetric",
             "mode": "CBC",
             "key_size": 64,
-            "description": "DES educational file encryption for course comparison.",
+            "description": "DES-CBC through OpenSSL for compatibility and comparison.",
         },
         {
             "name": "RSA-2048",
             "type": "asymmetric",
             "mode": "OAEP-SHA256",
             "key_size": 2048,
-            "description": "RSA demo encryption for small files or key wrapping.",
-        },
-        {
-            "name": "Hybrid RSA-AES",
-            "type": "hybrid",
-            "mode": "RSA-OAEP + AES-256-GCM",
-            "key_size": 2048,
-            "description": "Hybrid encryption for large files using RSA-OAEP and AES-256-GCM.",
+            "description": "RSA-2048 demo encryption through OpenSSL for small files or key wrapping.",
         },
         {
             "name": "DES-LAB",
             "type": "symmetric",
             "mode": "ECB / PKCS7",
             "key_size": 64,
-            "description": "DES implementation based on the laboratory code. Educational only.",
+            "description": "DES implementation from laboratory code, educational only.",
         },
         {
             "name": "RSA-LAB",
             "type": "asymmetric",
             "mode": "Textbook RSA",
-            "key_size": 12,
-            "description": "Textbook RSA implementation based on the laboratory code. Educational only.",
+            "key_size": 0,
+            "description": "Textbook RSA implementation from laboratory code, educational only.",
         },
         {
             "name": "SHA-1-LAB",
@@ -302,7 +297,7 @@ def seed_defaults():
             "type": "hash",
             "mode": "SHA-256",
             "key_size": 256,
-            "description": "SHA-256 implementation from laboratory code.",
+            "description": "SHA-256 implementation from laboratory code for file integrity checks.",
         },
         {
             "name": "HMAC-SHA1-LAB",
@@ -316,7 +311,7 @@ def seed_defaults():
             "type": "encoding",
             "mode": "Base64",
             "key_size": 0,
-            "description": "Base64 encoder/decoder from laboratory code. Encoding, not encryption.",
+            "description": "Base64 implementation from laboratory code for encoding keys in the database. Encoding, not encryption.",
         },
         {
             "name": "DIGITAL-SIGNATURE-LAB",
@@ -335,6 +330,13 @@ def seed_defaults():
         algorithm.mode = item["mode"]
         algorithm.key_size = item["key_size"]
         algorithm.description = item["description"]
+
+    for stale_name in ("Hybrid RSA-AES",):
+        stale_algorithm = Algorithm.query.filter_by(name=stale_name).first()
+        if stale_algorithm:
+            stale_algorithm.description = (
+                f"{stale_name} is kept only for backwards compatibility and is not part of the main workflow."
+            )
 
     db.session.commit()
 

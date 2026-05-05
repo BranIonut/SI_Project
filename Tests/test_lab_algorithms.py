@@ -4,13 +4,10 @@ import uuid
 
 import pytest
 
-from Business.crypto_service import CryptoManagerService, FileManagementService, KeyManagementService
 from Business.lab_algorithms import base64_lab, des_lab, hash_lab, modular_arithmetic_lab, rsa_lab, signature_pki_lab
 from Model.models import BASE_DIR, app, db, ensure_runtime_directories, seed_defaults
 from Repositories.algorithm_repo import AlgorithmRepository
-from Repositories.file_repo import FileRepository
 from Repositories.framework_repo import FrameworkRepository
-from Repositories.performance_repo import PerformanceRepository
 
 
 def unique_name(prefix):
@@ -108,6 +105,11 @@ def test_rsa_lab_encrypt_decrypt_file_returns_original_file_content(sandbox_dir)
         assert handle.read() == b"Hello Lab RSA"
 
 
+def test_rsa_lab_encrypt_bytes_rejects_invalid_small_modulus():
+    with pytest.raises(ValueError, match="n must be greater than 255"):
+        rsa_lab.rsa_encrypt_bytes(b"A", 17, 255)
+
+
 def test_sha1_returns_expected_value_for_abc():
     assert hash_lab.sha1(b"abc") == "a9993e364706816aba3e25717850c26c9cd0d89d"
 
@@ -122,9 +124,10 @@ def test_hmac_sha1_returns_stable_deterministic_value():
     assert value == "4fd0b215276ef12f2b3e4c8ecac2811498b656fc"
 
 
-def test_base64_encode_decode_returns_original_text():
-    encoded = base64_lab.encode_base64("hello")
-    assert base64_lab.decode_base64(encoded) == "hello"
+def test_base64_encode_decode_returns_original_bytes():
+    raw = b"\x00\x01\xfflab-bytes"
+    encoded = base64_lab.encode_base64_bytes(raw)
+    assert base64_lab.decode_base64_bytes(encoded) == raw
 
 
 def test_base64_file_encode_decode_returns_original_bytes(sandbox_dir):
@@ -138,15 +141,17 @@ def test_base64_file_encode_decode_returns_original_bytes(sandbox_dir):
 
 
 def test_digital_signature_verification_returns_true_for_unchanged_message():
-    pki = signature_pki_lab.PKISystem(3233, 17, 413)
-    certificate = signature_pki_lab.CertificateAuthority("Lab CA").issue_certificate("User", (3233, 17))
+    key_pair = rsa_lab.generate_demo_key_pair()
+    pki = signature_pki_lab.PKISystem(key_pair.n, key_pair.e, key_pair.d)
+    certificate = signature_pki_lab.CertificateAuthority("Lab CA").issue_certificate("User", (key_pair.n, key_pair.e))
     signed_doc = pki.create_signed_doc("Confidential Data")
     assert pki.verify_with_cert(signed_doc, certificate) is True
 
 
 def test_digital_signature_verification_returns_false_after_tampering_message():
-    pki = signature_pki_lab.PKISystem(3233, 17, 413)
-    certificate = signature_pki_lab.CertificateAuthority("Lab CA").issue_certificate("User", (3233, 17))
+    key_pair = rsa_lab.generate_demo_key_pair()
+    pki = signature_pki_lab.PKISystem(key_pair.n, key_pair.e, key_pair.d)
+    certificate = signature_pki_lab.CertificateAuthority("Lab CA").issue_certificate("User", (key_pair.n, key_pair.e))
     signed_doc = pki.create_signed_doc("Confidential Data")
     tampered_doc = signature_pki_lab.SignedDocument(
         m="Tampered Data",
@@ -169,39 +174,3 @@ def test_lab_educational_framework_and_algorithms_exist_after_seed():
     assert framework is not None
     assert des_algorithm is not None
     assert rsa_algorithm is not None
-
-
-def test_lab_des_operation_creates_performance_record(sandbox_dir):
-    input_path = write_sample_file(sandbox_dir, "lab_des.txt", b"Lab DES integration test")
-    with app.app_context():
-        framework = FrameworkRepository.get_by_name("Lab Educational")
-        algorithm = AlgorithmRepository.get_by_name("DES-LAB")
-        managed_file = FileManagementService.register_file(input_path)
-        key_record = KeyManagementService.generate_key(unique_name("labdes"), algorithm, framework)
-        encrypt_result = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
-        decrypt_result = CryptoManagerService.decrypt_file(encrypt_result.managed_file, algorithm, framework, key_record)
-        refreshed_file = FileRepository.get_by_id(managed_file.id)
-        encrypt_perf = PerformanceRepository.get_by_operation_id(encrypt_result.operation.id)
-        decrypt_perf = PerformanceRepository.get_by_operation_id(decrypt_result.operation.id)
-
-    assert refreshed_file.original_hash == refreshed_file.decrypted_hash
-    assert refreshed_file.integrity_verified is True
-    assert encrypt_perf is not None
-    assert decrypt_perf is not None
-    assert encrypt_perf.input_size_bytes > 0
-    assert decrypt_perf.output_size_bytes > 0
-
-
-def test_lab_rsa_operation_roundtrip_returns_original_file_content(sandbox_dir):
-    input_path = write_sample_file(sandbox_dir, "lab_rsa.txt", b"Lab RSA integration")
-    with app.app_context():
-        framework = FrameworkRepository.get_by_name("Lab Educational")
-        algorithm = AlgorithmRepository.get_by_name("RSA-LAB")
-        managed_file = FileManagementService.register_file(input_path)
-        key_record = KeyManagementService.generate_key(unique_name("labrsa"), algorithm, framework)
-        encrypt_result = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
-        decrypt_result = CryptoManagerService.decrypt_file(encrypt_result.managed_file, algorithm, framework, key_record)
-        refreshed_file = FileRepository.get_by_id(managed_file.id)
-    assert refreshed_file.original_hash == refreshed_file.decrypted_hash
-    assert refreshed_file.integrity_verified is True
-    assert os.path.exists(decrypt_result.output_path)

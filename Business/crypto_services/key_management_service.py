@@ -1,8 +1,11 @@
 import base64
 import json
 import os
+import secrets
 
 from Business.cryptography_service import CryptographyCryptoService
+from Business.lab_algorithms import base64_lab, rsa_lab
+from Business.lab_crypto_service import LabCryptoService
 from Business.crypto_services.common import RuntimePaths
 from Business.crypto_services.custom_service import CustomPythonService
 from Business.crypto_services.openssl_service import OpenSSLService
@@ -11,6 +14,10 @@ from Repositories.key_repo import KeyRepository
 
 
 class KeyManagementService:
+    @staticmethod
+    def _encode_bytes_for_storage(key_bytes):
+        return base64_lab.encode_base64_bytes(key_bytes)
+
     @staticmethod
     def _write_key_file(file_name, content):
         key_path = os.path.join(RuntimePaths.keys_dir, file_name)
@@ -35,35 +42,44 @@ class KeyManagementService:
                 algorithm_id=algorithm.id,
                 framework_id=framework.id,
                 key_type="symmetric",
-                key_value=base64.b64encode(key_bytes).decode("utf-8"),
+                key_value=KeyManagementService._encode_bytes_for_storage(key_bytes),
             )
 
         if algorithm_name.startswith("DES"):
-            key_bytes = (
-                OpenSSLService.generate_symmetric_key(8)
-                if framework_name == "openssl"
-                else CustomPythonService.generate_symmetric_key(8)
-            )
+            if algorithm_name == "DES-LAB" or framework.name == "Lab Educational":
+                key_bytes = secrets.token_bytes(8)
+            else:
+                key_bytes = (
+                    OpenSSLService.generate_symmetric_key(8)
+                    if framework_name == "openssl"
+                    else CustomPythonService.generate_symmetric_key(8)
+                )
             return KeyRepository.create(
                 name=name,
                 algorithm_id=algorithm.id,
                 framework_id=framework.id,
                 key_type="symmetric",
-                key_value=base64.b64encode(key_bytes).decode("utf-8"),
+                key_value=KeyManagementService._encode_bytes_for_storage(key_bytes),
             )
 
         if algorithm_name == "RSA-LAB":
-            demo_key = {
-                "n": 3233,
-                "e": 17,
-                "d": 413,
-            }
+            demo_key = rsa_lab.generate_demo_key_pair()
             return KeyRepository.create(
                 name=name,
                 algorithm_id=algorithm.id,
                 framework_id=framework.id,
                 key_type="keypair",
-                key_value=json.dumps(demo_key, sort_keys=True),
+                key_value=json.dumps(
+                    {
+                        "p": demo_key.p,
+                        "q": demo_key.q,
+                        "n": demo_key.n,
+                        "phi": demo_key.phi,
+                        "e": demo_key.e,
+                        "d": demo_key.d,
+                    },
+                    sort_keys=True,
+                ),
             )
 
         if algorithm_name.startswith("RSA") or algorithm_name.startswith("HYBRID"):
@@ -76,7 +92,7 @@ class KeyManagementService:
                 public_path = KeyManagementService._write_key_file(f"{name}_public.pem", public_pem)
                 private_path = KeyManagementService._write_key_file(f"{name}_private.pem", private_pem)
             else:
-                raise CryptoServiceError("RSA key generation is not available for the legacy custom framework.")
+                raise CryptoServiceError("RSA key generation is not available for this framework.")
 
             rsa_algorithm = algorithm if algorithm_name.startswith("RSA") else KeyRepository.resolve_rsa_algorithm()
             if not rsa_algorithm:
@@ -98,7 +114,13 @@ class KeyManagementService:
     def decode_symmetric_key(key_record):
         if not key_record.key_value:
             raise CryptoServiceError("Selected symmetric key has no stored value.")
-        return base64.b64decode(key_record.key_value.encode("utf-8"))
+        try:
+            return base64_lab.decode_base64_bytes(key_record.key_value)
+        except Exception:
+            try:
+                return base64.b64decode(key_record.key_value.encode("utf-8"))
+            except Exception as exc:
+                raise CryptoServiceError("Selected symmetric key contains invalid encoded key bytes.") from exc
 
     @staticmethod
     def key_paths(key_record):

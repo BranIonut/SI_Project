@@ -1,10 +1,10 @@
-import hashlib
 import os
 import time
 import tracemalloc
 from dataclasses import dataclass
 from typing import Any
 
+from Business.lab_algorithms import hash_lab
 from Model.models import BASE_DIR, utc_now
 
 try:
@@ -37,11 +37,7 @@ class NormalizedPerformanceMetrics:
 class HashService:
     @staticmethod
     def sha256_for_file(file_path):
-        digest = hashlib.sha256()
-        with open(file_path, "rb") as file_handle:
-            for chunk in iter(lambda: file_handle.read(8192), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
+        return hash_lab.sha256_file(file_path)
 
 
 class RuntimePaths:

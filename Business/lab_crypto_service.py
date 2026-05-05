@@ -21,6 +21,8 @@ class LabCryptoService:
 
     @staticmethod
     def rsa_encrypt_file(input_path, output_path, e, n):
+        if int(n) <= 255:
+            raise CryptoServiceError("RSA-LAB requires n > 255 for byte-by-byte file encryption.")
         try:
             rsa_lab.rsa_encrypt_file(input_path, output_path, e, n)
         except Exception as exc:

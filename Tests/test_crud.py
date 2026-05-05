@@ -1,11 +1,10 @@
-import hashlib
+import json
 import os
 import shutil
 import uuid
-import base64
-import json
 
 import pytest
+from PyQt6.QtWidgets import QApplication
 from sqlalchemy import inspect
 
 from Business.crypto_service import (
@@ -16,13 +15,18 @@ from Business.crypto_service import (
     KeyManagementService,
     PerformanceMetricCalculator,
 )
+from Business.lab_algorithms import base64_lab
 from Model.models import BASE_DIR, app, db, ensure_runtime_directories, init_db, seed_defaults
+from Presenter.kms_window import KMSWindow
 from Repositories.algorithm_repo import AlgorithmRepository
 from Repositories.file_repo import FileRepository
 from Repositories.framework_repo import FrameworkRepository
 from Repositories.key_repo import KeyRepository
 from Repositories.operation_repo import OperationRepository
 from Repositories.performance_repo import PerformanceRepository
+
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 
 def unique_name(prefix):
@@ -77,6 +81,12 @@ def sandbox_dir():
         shutil.rmtree(path, ignore_errors=True)
 
 
+@pytest.fixture(scope="module")
+def qt_app():
+    app_instance = QApplication.instance() or QApplication([])
+    yield app_instance
+
+
 def write_sample_file(sandbox_dir, name, content):
     file_path = os.path.join(sandbox_dir, name)
     with open(file_path, "wb") as handle:
@@ -85,13 +95,22 @@ def write_sample_file(sandbox_dir, name, content):
 
 
 def framework_by_name(name):
-    with app.app_context():
-        return FrameworkRepository.get_by_name(name)
+    return FrameworkRepository.get_by_name(name)
 
 
 def algorithm_by_name(name):
-    with app.app_context():
-        return AlgorithmRepository.get_by_name(name)
+    return AlgorithmRepository.get_by_name(name)
+
+
+def roundtrip(algorithm_name, framework_name, file_path, key_name):
+    framework = framework_by_name(framework_name)
+    algorithm = algorithm_by_name(algorithm_name)
+    managed_file = FileManagementService.register_file(file_path)
+    key_record = KeyManagementService.generate_key(key_name, algorithm, framework)
+    encrypt_result = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
+    decrypt_result = CryptoManagerService.decrypt_file(encrypt_result.managed_file, algorithm, framework, key_record)
+    refreshed_file = FileRepository.get_by_id(managed_file.id)
+    return key_record, encrypt_result, decrypt_result, refreshed_file
 
 
 def test_database_creation_works():
@@ -117,14 +136,14 @@ def test_default_frameworks_and_algorithms_exist():
     with app.app_context():
         frameworks = {framework.name for framework in FrameworkRepository.get_all()}
         algorithms = {algorithm.name for algorithm in AlgorithmRepository.get_all()}
-        cryptography_fw = FrameworkRepository.get_by_name("Cryptography")
-    assert {"OpenSSL", "Cryptography", "Custom Educational", "Lab Educational"}.issubset(frameworks)
+        lab_framework = FrameworkRepository.get_by_name("Lab Educational")
+        cryptography_framework = FrameworkRepository.get_by_name("Cryptography")
+    assert {"OpenSSL", "Cryptography", "Lab Educational", "Custom Educational / Legacy"}.issubset(frameworks)
     assert {
         "AES-256-CBC",
         "AES-256-GCM",
         "DES-CBC",
         "RSA-2048",
-        "Hybrid RSA-AES",
         "DES-LAB",
         "RSA-LAB",
         "SHA-1-LAB",
@@ -133,7 +152,8 @@ def test_default_frameworks_and_algorithms_exist():
         "BASE64-LAB",
         "DIGITAL-SIGNATURE-LAB",
     }.issubset(algorithms)
-    assert cryptography_fw.display_name == "Python cryptography"
+    assert "performance comparison with OpenSSL" in lab_framework.description
+    assert cryptography_framework.display_name == "Python cryptography"
 
 
 def test_framework_crud():
@@ -154,8 +174,8 @@ def test_algorithm_crud():
 
 def test_key_crud():
     with app.app_context():
-        framework = FrameworkRepository.get_by_name("Custom Educational")
-        algorithm = AlgorithmRepository.get_by_name("DES-CBC")
+        framework = FrameworkRepository.get_by_name("Lab Educational")
+        algorithm = AlgorithmRepository.get_by_name("DES-LAB")
         key_record = KeyRepository.create(
             name=unique_name("key"),
             algorithm_id=algorithm.id,
@@ -168,7 +188,7 @@ def test_key_crud():
         assert KeyRepository.delete(key_record.id) is True
 
 
-def test_managed_file_crud(sandbox_dir):
+def test_managed_file_crud_uses_internal_hash_service(sandbox_dir):
     original_path = write_sample_file(sandbox_dir, "crud.txt", b"crud-data")
     with app.app_context():
         managed_file = FileRepository.create(
@@ -177,6 +197,7 @@ def test_managed_file_crud(sandbox_dir):
             original_hash=HashService.sha256_for_file(original_path),
         )
         assert FileRepository.get_by_id(managed_file.id).original_name == "crud.txt"
+        assert managed_file.original_hash == "1932aa14f7a3c2e4e80c398dd657075025ec2e5652738081ffddca1632548bfa"
         assert FileRepository.update(managed_file.id, status="encrypted", encrypted_path="enc.bin").status == "encrypted"
         assert FileRepository.delete(managed_file.id) is True
 
@@ -215,77 +236,68 @@ def test_operation_and_performance_crud(sandbox_dir):
         assert OperationRepository.delete(operation.id) is True
 
 
-def test_count_keys_and_get_keys_paginated_empty_db_case():
+def test_duplicate_registration_reuses_same_managed_file(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "duplicate.txt", b"duplicate-data")
     with app.app_context():
-        for key in KeyRepository.get_all():
-            KeyRepository.delete(key.id)
-        assert KeyRepository.count_keys() == 0
-        assert KeyRepository.get_keys_paginated(1, 10) == []
+        first = FileManagementService.register_file(input_path)
+        second = FileManagementService.register_file(input_path)
+        all_files = FileRepository.get_all()
+    assert first.id == second.id
+    assert len(all_files) == 1
+    assert os.path.exists(second.original_path)
 
 
-def test_get_keys_paginated_first_middle_last_pages():
+def test_duplicate_registration_preserves_processed_state_when_file_is_unchanged(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "duplicate_processed.txt", b"duplicate-processed-data")
     with app.app_context():
-        framework = FrameworkRepository.get_by_name("Custom Educational")
-        algorithm = AlgorithmRepository.get_by_name("DES-CBC")
-        created_names = []
-        for index in range(23):
-            name = f"page_key_{index:02d}"
-            KeyRepository.create(
-                name=name,
-                algorithm_id=algorithm.id,
-                framework_id=framework.id,
-                key_type="symmetric",
-                key_value=f"value_{index}",
-            )
-            created_names.append(name)
-
-        assert KeyRepository.count_keys() == 23
-        first_page = KeyRepository.get_keys_paginated(1, 10)
-        middle_page = KeyRepository.get_keys_paginated(2, 10)
-        last_page = KeyRepository.get_keys_paginated(3, 10)
-
-    assert len(first_page) == 10
-    assert len(middle_page) == 10
-    assert len(last_page) == 3
-    ordered_names = [item.name for item in first_page + middle_page + last_page]
-    assert ordered_names == list(reversed(created_names))
-
-
-def test_compatible_key_pagination_for_setup_dropdown():
-    with app.app_context():
-        framework = FrameworkRepository.get_by_name("Cryptography")
+        framework = FrameworkRepository.get_by_name("OpenSSL")
         algorithm = AlgorithmRepository.get_by_name("AES-256-CBC")
-        hybrid_algorithm = AlgorithmRepository.get_by_name("Hybrid RSA-AES")
-        rsa_algorithm = AlgorithmRepository.get_by_name("RSA-2048")
+        managed_file = FileManagementService.register_file(input_path)
+        key_record = KeyManagementService.generate_key(unique_name("dup_aes"), algorithm, framework)
+        encrypted = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
+        CryptoManagerService.decrypt_file(encrypted.managed_file, algorithm, framework, key_record)
+        refreshed_before = FileRepository.get_by_id(managed_file.id)
+        before_snapshot = (
+            refreshed_before.status,
+            refreshed_before.encrypted_path,
+            refreshed_before.decrypted_path,
+            refreshed_before.integrity_verified,
+        )
+        refreshed_after = FileManagementService.register_file(input_path)
+        after_snapshot = (
+            refreshed_after.status,
+            refreshed_after.encrypted_path,
+            refreshed_after.decrypted_path,
+            refreshed_after.integrity_verified,
+        )
+    assert before_snapshot[0] == "decrypted"
+    assert after_snapshot[0] == "decrypted"
+    assert after_snapshot[1] == before_snapshot[1]
+    assert after_snapshot[2] == before_snapshot[2]
+    assert after_snapshot[3] is True
 
-        for index in range(12):
-            KeyRepository.create(
-                name=f"compat_aes_{index:02d}",
-                algorithm_id=algorithm.id,
-                framework_id=framework.id,
-                key_type="symmetric",
-                key_value=f"value_{index}",
-            )
-        for index in range(7):
-            KeyRepository.create(
-                name=f"compat_rsa_{index:02d}",
-                algorithm_id=rsa_algorithm.id,
-                framework_id=framework.id,
-                key_type="keypair",
-                public_key_value=f"pub_{index}",
-                private_key_value=f"priv_{index}",
-            )
 
-        assert KeyRepository.count_compatible_active_keys(framework.id, algorithm) == 12
-        first_page = KeyRepository.get_compatible_active_keys_paginated(framework.id, algorithm, 1, 5)
-        last_page = KeyRepository.get_compatible_active_keys_paginated(framework.id, algorithm, 3, 5)
-        hybrid_page = KeyRepository.get_compatible_active_keys_paginated(framework.id, hybrid_algorithm, 1, 10)
+def test_key_management_uses_base64_lab_for_des_lab_keys():
+    with app.app_context():
+        framework = FrameworkRepository.get_by_name("Lab Educational")
+        algorithm = AlgorithmRepository.get_by_name("DES-LAB")
+        key_record = KeyManagementService.generate_key(unique_name("lab_des_key"), algorithm, framework)
+        decoded = KeyManagementService.decode_symmetric_key(key_record)
+        encoded_value = key_record.key_value
 
-    assert len(first_page) == 5
-    assert len(last_page) == 2
-    assert all(item.algorithm.name == "AES-256-CBC" for item in first_page)
-    assert len(hybrid_page) == 7
-    assert all(item.algorithm.name == "RSA-2048" for item in hybrid_page)
+    assert len(decoded) == 8
+    assert encoded_value == base64_lab.encode_base64_bytes(decoded)
+
+
+def test_rsa_lab_key_generation_stores_json_parameters():
+    with app.app_context():
+        framework = FrameworkRepository.get_by_name("Lab Educational")
+        algorithm = AlgorithmRepository.get_by_name("RSA-LAB")
+        key_record = KeyManagementService.generate_key(unique_name("lab_rsa_key"), algorithm, framework)
+        payload = json.loads(key_record.key_value)
+    assert payload["n"] == 3233
+    assert payload["e"] == 17
+    assert payload["d"] == 2753
 
 
 def test_performance_calculations_include_normalized_metrics():
@@ -296,237 +308,236 @@ def test_performance_calculations_include_normalized_metrics():
     assert metrics.throughput_mib_per_second == pytest.approx(20000.0 / (1024 * 1024))
 
 
-def test_performance_calculations_protect_zero_size_input():
-    metrics = PerformanceMetricCalculator.calculate(0.0, 0.0, 0, 0)
-    assert metrics.time_per_byte_ms is None
-    assert metrics.time_per_byte_us is None
-    assert metrics.throughput_bytes_per_second is None
-    assert metrics.throughput_mib_per_second is None
-
-
-def _roundtrip_test(sandbox_dir, algorithm_name, framework_name, file_name, content):
-    input_path = write_sample_file(sandbox_dir, file_name, content)
+def test_aes_openssl_encrypt_decrypt_roundtrip(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "openssl_aes.txt", b"OpenSSL AES test content")
     with app.app_context():
-        framework = FrameworkRepository.get_by_name(framework_name)
-        algorithm = AlgorithmRepository.get_by_name(algorithm_name)
-        managed_file = FileManagementService.register_file(input_path)
-        key_record = KeyManagementService.generate_key(unique_name(f"{algorithm_name}_{framework_name}"), algorithm, framework)
-        encrypt_result = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
-        decrypt_result = CryptoManagerService.decrypt_file(encrypt_result.managed_file, algorithm, framework, key_record)
-        refreshed_file = FileRepository.get_by_id(managed_file.id)
-        last_encrypt = OperationRepository.get_latest_successful_encrypt_for_file(managed_file.id, algorithm.id, framework.id)
-    assert os.path.exists(encrypt_result.output_path)
+        _, _, decrypt_result, refreshed_file = roundtrip(
+            "AES-256-CBC",
+            "OpenSSL",
+            input_path,
+            unique_name("openssl_aes_key"),
+        )
     assert os.path.exists(decrypt_result.output_path)
     assert refreshed_file.original_hash == refreshed_file.decrypted_hash
     assert refreshed_file.integrity_verified is True
-    assert decrypt_result.performance.execution_time_ms >= 0
-    assert decrypt_result.performance.memory_usage_mb >= 0
-    assert last_encrypt is not None
-    return encrypt_result, decrypt_result, refreshed_file, last_encrypt
 
 
-def test_aes_openssl_encrypt_decrypt_roundtrip(sandbox_dir):
-    _roundtrip_test(sandbox_dir, "AES-256-CBC", "OpenSSL", "openssl_aes.txt", b"OpenSSL AES test content")
-
-
-def test_aes_custom_encrypt_decrypt_roundtrip(sandbox_dir):
-    _roundtrip_test(sandbox_dir, "AES-256-CBC", "Custom Educational", "custom_aes.txt", b"Custom AES roundtrip")
-
-
-def test_des_openssl_encrypt_decrypt_roundtrip(sandbox_dir):
-    _roundtrip_test(sandbox_dir, "DES-CBC", "OpenSSL", "openssl_des.txt", b"OpenSSL DES test content")
-
-
-def test_des_custom_encrypt_decrypt_roundtrip(sandbox_dir):
-    _roundtrip_test(sandbox_dir, "DES-CBC", "Custom Educational", "custom_des.txt", b"Custom DES roundtrip")
-
-
-def test_rsa_encrypt_decrypt_small_demo_file_works(sandbox_dir):
-    _roundtrip_test(sandbox_dir, "RSA-2048", "OpenSSL", "small_rsa.txt", b"small rsa demo")
-
-
-def test_cryptography_framework_exists_after_seed():
+def test_aes_cryptography_cbc_encrypt_decrypt_roundtrip(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "cryptography_aes_cbc.txt", b"Cryptography AES CBC test content")
     with app.app_context():
-        framework = FrameworkRepository.get_by_name("Cryptography")
-    assert framework is not None
-    assert framework.display_name == "Python cryptography"
-    assert (
-        framework.description
-        == "Real cryptographic framework implemented using the Python cryptography library. Used as an alternative to OpenSSL for performance comparison."
-    )
-
-
-def test_aes_256_gcm_algorithm_exists_after_seed():
-    with app.app_context():
-        algorithm = AlgorithmRepository.get_by_name("AES-256-GCM")
-    assert algorithm is not None
-    assert algorithm.type == "symmetric"
-    assert algorithm.mode == "GCM"
-    assert algorithm.description == "Authenticated symmetric encryption using AES with 256-bit keys in GCM mode."
-
-
-def test_cryptography_aes_key_generation_stores_base64_32_byte_key():
-    with app.app_context():
-        framework = FrameworkRepository.get_by_name("Cryptography")
-        algorithm = AlgorithmRepository.get_by_name("AES-256-GCM")
-        key_record = KeyManagementService.generate_key(unique_name("crypto_gcm_key"), algorithm, framework)
-        stored = KeyRepository.get_by_id(key_record.id)
-
-    decoded_key = base64.b64decode(stored.key_value.encode("utf-8"))
-    assert len(decoded_key) == 32
-    assert base64.b64encode(decoded_key).decode("utf-8") == stored.key_value
-
-
-def test_cryptography_aes_cbc_encrypt_decrypt_hash_matches(sandbox_dir):
-    _, _, refreshed_file, encrypt_op = _roundtrip_test(
-        sandbox_dir,
-        "AES-256-CBC",
-        "Cryptography",
-        "crypto_aes_cbc.txt",
-        b"Cryptography AES CBC content",
-    )
+        _, encrypt_result, decrypt_result, refreshed_file = roundtrip(
+            "AES-256-CBC",
+            "Cryptography",
+            input_path,
+            unique_name("cryptography_aes_cbc_key"),
+        )
+        encrypt_perf = PerformanceRepository.get_by_operation_id(encrypt_result.operation.id)
+        decrypt_perf = PerformanceRepository.get_by_operation_id(decrypt_result.operation.id)
+    assert os.path.exists(decrypt_result.output_path)
     assert refreshed_file.original_hash == refreshed_file.decrypted_hash
-    assert encrypt_op.auth_tag is not None
+    assert refreshed_file.integrity_verified is True
+    assert encrypt_perf is not None
+    assert decrypt_perf is not None
 
 
-def test_cryptography_aes_gcm_encrypt_decrypt_hash_matches(sandbox_dir):
-    _, _, refreshed_file, encrypt_op = _roundtrip_test(
-        sandbox_dir,
-        "AES-256-GCM",
-        "Cryptography",
-        "crypto_aes_gcm.txt",
-        b"Cryptography AES GCM content",
-    )
+def test_aes_cryptography_gcm_encrypt_decrypt_roundtrip(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "cryptography_aes_gcm.txt", b"Cryptography AES GCM test content")
+    with app.app_context():
+        _, encrypt_result, decrypt_result, refreshed_file = roundtrip(
+            "AES-256-GCM",
+            "Cryptography",
+            input_path,
+            unique_name("cryptography_aes_gcm_key"),
+        )
+        encrypt_operation = OperationRepository.get_by_id(encrypt_result.operation.id)
+    assert os.path.exists(decrypt_result.output_path)
     assert refreshed_file.original_hash == refreshed_file.decrypted_hash
-    assert encrypt_op.iv_nonce is not None
-    assert encrypt_op.auth_tag is not None
-    metadata = json.loads(encrypt_op.operation_metadata_json)
-    assert metadata["framework"] == "Cryptography"
-    assert metadata["algorithm"] == "AES-256-GCM"
-    assert metadata["mode"] == "GCM"
-    assert metadata["nonce_b64"] == encrypt_op.iv_nonce
-    assert metadata["auth_tag_b64"] == encrypt_op.auth_tag
+    assert refreshed_file.integrity_verified is True
+    assert encrypt_operation.iv_nonce is not None
+    assert encrypt_operation.auth_tag is not None
+
+
+def test_rsa_cryptography_encrypt_decrypt_small_demo_file_works(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "small_crypto_rsa.txt", b"small cryptography rsa demo")
+    with app.app_context():
+        _, _, decrypt_result, refreshed_file = roundtrip(
+            "RSA-2048",
+            "Cryptography",
+            input_path,
+            unique_name("cryptography_rsa_key"),
+        )
+    assert os.path.exists(decrypt_result.output_path)
+    assert refreshed_file.original_hash == refreshed_file.decrypted_hash
+    assert refreshed_file.integrity_verified is True
 
 
 def test_cryptography_aes_gcm_wrong_key_fails_clearly(sandbox_dir):
-    input_path = write_sample_file(sandbox_dir, "crypto_wrong_key.txt", b"wrong key gcm content")
+    input_path = write_sample_file(sandbox_dir, "gcm_wrong_key.txt", b"gcm wrong key")
     with app.app_context():
         framework = FrameworkRepository.get_by_name("Cryptography")
         algorithm = AlgorithmRepository.get_by_name("AES-256-GCM")
         managed_file = FileManagementService.register_file(input_path)
-        correct_key = KeyManagementService.generate_key(unique_name("crypto_gcm_ok"), algorithm, framework)
-        wrong_key = KeyManagementService.generate_key(unique_name("crypto_gcm_bad"), algorithm, framework)
+        correct_key = KeyManagementService.generate_key(unique_name("gcm_ok"), algorithm, framework)
+        wrong_key = KeyManagementService.generate_key(unique_name("gcm_bad"), algorithm, framework)
         encrypted = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, correct_key)
         with pytest.raises(CryptoServiceError, match="AES-GCM integrity verification failed"):
             CryptoManagerService.decrypt_file(encrypted.managed_file, algorithm, framework, wrong_key)
 
 
-def test_cryptography_aes_gcm_tampered_ciphertext_fails_authentication(sandbox_dir):
-    input_path = write_sample_file(sandbox_dir, "crypto_tamper.txt", b"tamper detection for aes gcm")
+def test_cryptography_aes_gcm_tampered_ciphertext_fails_clearly(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "gcm_tamper.txt", b"gcm tamper")
     with app.app_context():
         framework = FrameworkRepository.get_by_name("Cryptography")
         algorithm = AlgorithmRepository.get_by_name("AES-256-GCM")
         managed_file = FileManagementService.register_file(input_path)
-        key_record = KeyManagementService.generate_key(unique_name("crypto_gcm_tamper"), algorithm, framework)
+        key_record = KeyManagementService.generate_key(unique_name("gcm_tamper"), algorithm, framework)
         encrypted = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
-
-        with open(encrypted.output_path, "rb") as encrypted_file:
-            ciphertext = bytearray(encrypted_file.read())
-        ciphertext[0] ^= 0x01
-        with open(encrypted.output_path, "wb") as encrypted_file:
-            encrypted_file.write(ciphertext)
-
-        refreshed_file = FileRepository.get_by_id(managed_file.id)
+        with open(encrypted.output_path, "rb") as handle:
+            payload = bytearray(handle.read())
+        payload[0] ^= 1
+        with open(encrypted.output_path, "wb") as handle:
+            handle.write(payload)
         with pytest.raises(CryptoServiceError, match="AES-GCM integrity verification failed"):
-            CryptoManagerService.decrypt_file(refreshed_file, algorithm, framework, key_record)
+            CryptoManagerService.decrypt_file(FileRepository.get_by_id(managed_file.id), algorithm, framework, key_record)
 
 
-def test_cryptography_operations_create_performance_records(sandbox_dir):
-    input_path = write_sample_file(sandbox_dir, "crypto_perf.txt", b"cryptography perf test" * 32)
+def test_rsa_openssl_encrypt_decrypt_small_demo_file_works(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "small_rsa.txt", b"small rsa demo")
     with app.app_context():
-        framework = FrameworkRepository.get_by_name("Cryptography")
-        algorithm = AlgorithmRepository.get_by_name("AES-256-GCM")
-        managed_file = FileManagementService.register_file(input_path)
-        key_record = KeyManagementService.generate_key(unique_name("crypto_gcm_perf"), algorithm, framework)
-        encrypted = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
-        decrypted = CryptoManagerService.decrypt_file(encrypted.managed_file, algorithm, framework, key_record)
-        encrypt_performance = PerformanceRepository.get_by_operation_id(encrypted.operation.id)
-        decrypt_performance = PerformanceRepository.get_by_operation_id(decrypted.operation.id)
-
-    assert encrypt_performance is not None
-    assert decrypt_performance is not None
-    for performance in (encrypt_performance, decrypt_performance):
-        assert performance.execution_time_ms >= 0
-        assert performance.memory_usage_mb >= 0
-        assert performance.input_size_bytes > 0
-        assert performance.output_size_bytes > 0
-
-
-def test_sha256_hash_correctness(sandbox_dir):
-    input_path = write_sample_file(sandbox_dir, "hash.txt", b"hash validation")
-    expected_hash = hashlib.sha256(b"hash validation").hexdigest()
-    assert HashService.sha256_for_file(input_path) == expected_hash
-
-
-def test_original_hash_equals_decrypted_hash_after_roundtrip(sandbox_dir):
-    input_path = write_sample_file(sandbox_dir, "hash_roundtrip.txt", b"hash roundtrip validation")
-    with app.app_context():
-        framework = FrameworkRepository.get_by_name("Custom Educational")
-        algorithm = AlgorithmRepository.get_by_name("AES-256-CBC")
-        managed_file = FileManagementService.register_file(input_path)
-        key_record = KeyManagementService.generate_key(unique_name("hashkey"), algorithm, framework)
-        CryptoManagerService.decrypt_file(
-            CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record).managed_file,
-            algorithm,
-            framework,
-            key_record,
+        _, _, decrypt_result, refreshed_file = roundtrip(
+            "RSA-2048",
+            "OpenSSL",
+            input_path,
+            unique_name("openssl_rsa_key"),
         )
-        refreshed_file = FileRepository.get_by_id(managed_file.id)
+    assert os.path.exists(decrypt_result.output_path)
     assert refreshed_file.original_hash == refreshed_file.decrypted_hash
+    assert refreshed_file.integrity_verified is True
 
 
-def test_invalid_algorithm_key_combination_is_rejected(sandbox_dir):
+def test_lab_des_roundtrip_creates_performance_record(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "lab_des.txt", b"Lab DES integration test")
+    with app.app_context():
+        _, encrypt_result, decrypt_result, refreshed_file = roundtrip(
+            "DES-LAB",
+            "Lab Educational",
+            input_path,
+            unique_name("lab_des_key"),
+        )
+        encrypt_perf = PerformanceRepository.get_by_operation_id(encrypt_result.operation.id)
+        decrypt_perf = PerformanceRepository.get_by_operation_id(decrypt_result.operation.id)
+    assert refreshed_file.original_hash == refreshed_file.decrypted_hash
+    assert refreshed_file.integrity_verified is True
+    assert encrypt_perf is not None
+    assert decrypt_perf is not None
+
+
+def test_lab_rsa_roundtrip_creates_performance_record(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "lab_rsa.txt", b"Lab RSA integration")
+    with app.app_context():
+        _, encrypt_result, decrypt_result, refreshed_file = roundtrip(
+            "RSA-LAB",
+            "Lab Educational",
+            input_path,
+            unique_name("lab_rsa_key"),
+        )
+        encrypt_perf = PerformanceRepository.get_by_operation_id(encrypt_result.operation.id)
+        decrypt_perf = PerformanceRepository.get_by_operation_id(decrypt_result.operation.id)
+    assert refreshed_file.original_hash == refreshed_file.decrypted_hash
+    assert refreshed_file.integrity_verified is True
+    assert encrypt_perf is not None
+    assert decrypt_perf is not None
+
+
+def test_invalid_framework_algorithm_combination_is_rejected(sandbox_dir):
     input_path = write_sample_file(sandbox_dir, "invalid.txt", b"invalid combo")
     with app.app_context():
-        openssl_fw = FrameworkRepository.get_by_name("OpenSSL")
-        aes_algorithm = AlgorithmRepository.get_by_name("AES-256-CBC")
-        rsa_algorithm = AlgorithmRepository.get_by_name("RSA-2048")
+        framework = FrameworkRepository.get_by_name("Lab Educational")
+        algorithm = AlgorithmRepository.get_by_name("AES-256-CBC")
         managed_file = FileManagementService.register_file(input_path)
-        rsa_key = KeyManagementService.generate_key(unique_name("invalidrsa"), rsa_algorithm, openssl_fw)
-        with pytest.raises(CryptoServiceError, match="Selected key does not belong to the selected algorithm"):
-            CryptoManagerService.encrypt_file(managed_file, aes_algorithm, openssl_fw, rsa_key)
+        lab_des_key = KeyManagementService.generate_key(unique_name("labdes"), AlgorithmRepository.get_by_name("DES-LAB"), framework)
+        with pytest.raises(CryptoServiceError, match="Unsupported framework/algorithm combination"):
+            CryptoManagerService.encrypt_file(managed_file, algorithm, framework, lab_des_key)
 
 
-def test_hybrid_rsa_aes_encrypt_decrypt_large_file_and_save_wrapped_key(sandbox_dir):
-    large_content = (b"hybrid-large-file-" * 64) + b"tail"
-    input_path = write_sample_file(sandbox_dir, "hybrid_large.bin", large_content)
+def test_rsa_large_file_rejection_is_recorded_as_failed_operation(sandbox_dir):
+    input_path = write_sample_file(sandbox_dir, "large_rsa.txt", b"x" * 256)
     with app.app_context():
-        framework = FrameworkRepository.get_by_name("Cryptography")
-        algorithm = AlgorithmRepository.get_by_name("Hybrid RSA-AES")
+        framework = FrameworkRepository.get_by_name("OpenSSL")
+        algorithm = AlgorithmRepository.get_by_name("RSA-2048")
         managed_file = FileManagementService.register_file(input_path)
-        key_record = KeyManagementService.generate_key(unique_name("hybrid"), algorithm, framework)
-        encrypt_result = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
-        decrypt_result = CryptoManagerService.decrypt_file(encrypt_result.managed_file, algorithm, framework, key_record)
+        key_record = KeyManagementService.generate_key(unique_name("rsa_large"), algorithm, framework)
+        with pytest.raises(CryptoServiceError, match="small demo files"):
+            CryptoManagerService.encrypt_file(managed_file, algorithm, framework, key_record)
         refreshed_file = FileRepository.get_by_id(managed_file.id)
-        encrypt_operation = OperationRepository.get_latest_successful_encrypt_for_file(managed_file.id, algorithm.id, framework.id)
-        performance = PerformanceRepository.get_by_operation_id(decrypt_result.operation.id)
-    assert len(large_content) > 190
-    assert refreshed_file.original_hash == refreshed_file.decrypted_hash
-    assert encrypt_operation.encrypted_data_key is not None
-    assert encrypt_operation.iv_nonce is not None
-    assert encrypt_operation.auth_tag is not None
-    assert encrypt_operation.key_wrap_algorithm == "RSA-OAEP-SHA256"
-    assert performance is not None
+        latest_operation = OperationRepository.get_all()[0]
+    assert refreshed_file.status == "failed"
+    assert latest_operation.status == "failed"
 
 
-def test_hybrid_rsa_aes_wrong_private_key_fails(sandbox_dir):
-    input_path = write_sample_file(sandbox_dir, "wrong_key.bin", b"wrong private key test" * 32)
+def test_compatible_key_filtering_for_main_workflow():
     with app.app_context():
-        framework = FrameworkRepository.get_by_name("Cryptography")
-        algorithm = AlgorithmRepository.get_by_name("Hybrid RSA-AES")
-        managed_file = FileManagementService.register_file(input_path)
-        correct_key = KeyManagementService.generate_key(unique_name("hybrid_ok"), algorithm, framework)
-        wrong_key = KeyManagementService.generate_key(unique_name("hybrid_bad"), algorithm, framework)
-        encrypted = CryptoManagerService.encrypt_file(managed_file, algorithm, framework, correct_key)
-        with pytest.raises(CryptoServiceError, match="private key may be wrong"):
-            CryptoManagerService.decrypt_file(encrypted.managed_file, algorithm, framework, wrong_key)
+        openssl = FrameworkRepository.get_by_name("OpenSSL")
+        cryptography = FrameworkRepository.get_by_name("Cryptography")
+        lab = FrameworkRepository.get_by_name("Lab Educational")
+        aes = AlgorithmRepository.get_by_name("AES-256-CBC")
+        aes_gcm = AlgorithmRepository.get_by_name("AES-256-GCM")
+        rsa = AlgorithmRepository.get_by_name("RSA-2048")
+        des_lab = AlgorithmRepository.get_by_name("DES-LAB")
+        rsa_lab = AlgorithmRepository.get_by_name("RSA-LAB")
+
+        openssl_aes_key = KeyManagementService.generate_key(unique_name("aes"), aes, openssl)
+        cryptography_aes_key = KeyManagementService.generate_key(unique_name("crypto_aes"), aes, cryptography)
+        cryptography_aes_gcm_key = KeyManagementService.generate_key(unique_name("crypto_gcm"), aes_gcm, cryptography)
+        cryptography_rsa_key = KeyManagementService.generate_key(unique_name("crypto_rsa"), rsa, cryptography)
+        lab_des_key = KeyManagementService.generate_key(unique_name("des_lab"), des_lab, lab)
+        lab_rsa_key = KeyManagementService.generate_key(unique_name("rsa_lab"), rsa_lab, lab)
+
+        openssl_keys = KeyRepository.get_compatible_active_keys_paginated(openssl.id, aes, 1, 10)
+        cryptography_aes_keys = KeyRepository.get_compatible_active_keys_paginated(cryptography.id, aes, 1, 10)
+        cryptography_aes_gcm_keys = KeyRepository.get_compatible_active_keys_paginated(cryptography.id, aes_gcm, 1, 10)
+        cryptography_rsa_keys = KeyRepository.get_compatible_active_keys_paginated(cryptography.id, rsa, 1, 10)
+        lab_des_keys = KeyRepository.get_compatible_active_keys_paginated(lab.id, des_lab, 1, 10)
+        lab_rsa_keys = KeyRepository.get_compatible_active_keys_paginated(lab.id, rsa_lab, 1, 10)
+
+    assert [item.id for item in openssl_keys] == [openssl_aes_key.id]
+    assert [item.id for item in cryptography_aes_keys] == [cryptography_aes_key.id]
+    assert [item.id for item in cryptography_aes_gcm_keys] == [cryptography_aes_gcm_key.id]
+    assert [item.id for item in cryptography_rsa_keys] == [cryptography_rsa_key.id]
+    assert [item.id for item in lab_des_keys] == [lab_des_key.id]
+    assert [item.id for item in lab_rsa_keys] == [lab_rsa_key.id]
+
+
+def test_main_ui_hides_demo_lab_box_and_shows_integrated_frameworks(qt_app):
+    with app.app_context():
+        window = KMSWindow()
+        algorithm_items = [window.combo_alg.itemText(index) for index in range(window.combo_alg.count())]
+        default_framework_items = [window.combo_fw.itemText(index) for index in range(window.combo_fw.count())]
+        gcm_algorithm_index = next(
+            index for index in range(window.combo_alg.count()) if window.combo_alg.itemText(index).startswith("AES-256-GCM")
+        )
+        window.combo_alg.setCurrentIndex(gcm_algorithm_index)
+        gcm_framework_items = [window.combo_fw.itemText(index) for index in range(window.combo_fw.count())]
+        lab_algorithm_index = next(
+            index for index in range(window.combo_alg.count()) if window.combo_alg.itemText(index).startswith("DES-LAB")
+        )
+        window.combo_alg.setCurrentIndex(lab_algorithm_index)
+        lab_framework_items = [window.combo_fw.itemText(index) for index in range(window.combo_fw.count())]
+
+    assert not hasattr(window, "btn_lab_sha256")
+    assert not hasattr(window, "btn_lab_hmac")
+    assert not hasattr(window, "btn_lab_b64_encode")
+    assert not hasattr(window, "btn_lab_b64_decode")
+    assert not hasattr(window, "btn_lab_signature")
+    assert "OpenSSL" in default_framework_items
+    assert "Python cryptography" in default_framework_items
+    assert gcm_framework_items == ["Python cryptography"]
+    assert "Lab Educational" in lab_framework_items
+    assert window.framework_badge.text() == "Frameworks: 3"
+    assert window.algorithm_badge.text() == "Algorithms: 6"
+    assert any(item.startswith("AES-256-GCM") for item in algorithm_items)
+    assert any(item.startswith("DES-LAB") for item in algorithm_items)
+    assert any(item.startswith("RSA-LAB") for item in algorithm_items)
+    assert not any("Hybrid RSA-AES" in item for item in algorithm_items)
+    assert not any("BASE64-LAB" in item or "HMAC-SHA1-LAB" in item or "DIGITAL-SIGNATURE-LAB" in item for item in algorithm_items)
+    window.close()

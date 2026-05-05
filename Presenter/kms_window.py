@@ -29,7 +29,6 @@ from Business.crypto_service import (
     FileManagementService,
     KeyManagementService,
 )
-from Business.lab_crypto_service import LabCryptoService
 from Model.models import app, init_db
 from Repositories.algorithm_repo import AlgorithmRepository
 from Repositories.file_repo import FileRepository
@@ -278,46 +277,7 @@ class KMSWindow(QWidget):
 
         layout.addWidget(op_group)
 
-        lab_group = QGroupBox("5. Educational Lab Algorithms")
-        lab_layout = QVBoxLayout(lab_group)
-        lab_layout.setContentsMargins(12, 0, 12, 12)
-        lab_layout.setSpacing(8)
-
-        self.lab_hint_label = QLabel(
-            "Optional educational tools for SHA, HMAC, Base64, and textbook RSA signature demos."
-        )
-        self.lab_hint_label.setObjectName("hintLabel")
-        self.lab_hint_label.setWordWrap(True)
-        lab_layout.addWidget(self.lab_hint_label)
-
-        self.btn_lab_sha256 = QPushButton("SHA-256-LAB Hash")
-        self.btn_lab_sha256.setObjectName("neutralButton")
-        self.btn_lab_sha256.clicked.connect(self.run_lab_sha256)
-
-        self.btn_lab_hmac = QPushButton("HMAC-SHA1-LAB")
-        self.btn_lab_hmac.setObjectName("neutralButton")
-        self.btn_lab_hmac.clicked.connect(self.run_lab_hmac_sha1)
-
-        self.btn_lab_b64_encode = QPushButton("Base64 Encode")
-        self.btn_lab_b64_encode.setObjectName("neutralButton")
-        self.btn_lab_b64_encode.clicked.connect(self.run_lab_base64_encode)
-
-        self.btn_lab_b64_decode = QPushButton("Base64 Decode")
-        self.btn_lab_b64_decode.setObjectName("neutralButton")
-        self.btn_lab_b64_decode.clicked.connect(self.run_lab_base64_decode)
-
-        self.btn_lab_signature = QPushButton("Signature Demo")
-        self.btn_lab_signature.setObjectName("neutralButton")
-        self.btn_lab_signature.clicked.connect(self.run_lab_signature_demo)
-
-        lab_layout.addWidget(self.btn_lab_sha256)
-        lab_layout.addWidget(self.btn_lab_hmac)
-        lab_layout.addWidget(self.btn_lab_b64_encode)
-        lab_layout.addWidget(self.btn_lab_b64_decode)
-        lab_layout.addWidget(self.btn_lab_signature)
-        layout.addWidget(lab_group)
-
-        status_group = QGroupBox("6. Status")
+        status_group = QGroupBox("5. Status")
         status_layout = QVBoxLayout(status_group)
         status_layout.setContentsMargins(12, 0, 12, 12)
 
@@ -770,7 +730,16 @@ class KMSWindow(QWidget):
                 for algorithm in all_algorithms
                 if CryptoManagerService.supported_framework_names_for_algorithm(algorithm.name)
             ]
-            frameworks = FrameworkRepository.get_all()
+            supported_framework_names = {
+                framework_name
+                for algorithm in algorithms
+                for framework_name in CryptoManagerService.supported_framework_names_for_algorithm(algorithm.name)
+            }
+            frameworks = [
+                framework
+                for framework in FrameworkRepository.get_all()
+                if framework.name in supported_framework_names
+            ]
             key_count = KeyRepository.count_keys()
             operations = OperationRepository.get_all()
             self._algorithms_cache = algorithms
@@ -785,7 +754,7 @@ class KMSWindow(QWidget):
                 self.combo_alg.addItem(f"{alg.name} ({alg.type}{mode})", alg.id)
 
             self.framework_badge.setText(f"Frameworks: {len(frameworks)}")
-            self.algorithm_badge.setText(f"Algorithms: {len(all_algorithms)}")
+            self.algorithm_badge.setText(f"Algorithms: {len(algorithms)}")
             self.metric_operation_count.value_label.setText(str(len(operations)))
             self.metric_key_count.value_label.setText(str(key_count))
 
@@ -1089,76 +1058,6 @@ class KMSWindow(QWidget):
         )
 
         self.load_data()
-
-    def run_lab_sha256(self):
-        with app.app_context():
-            managed_file = self._selected_managed_file()
-            if not managed_file:
-                QMessageBox.warning(self, "Warning", "Select a managed file first.")
-                return
-            digest = LabCryptoService.sha256_file(managed_file.original_path)
-        self.status_label.setText(f"SHA-256-LAB for {managed_file.original_name}:\n{digest}")
-        QMessageBox.information(self, "SHA-256-LAB", digest)
-
-    def run_lab_hmac_sha1(self):
-        with app.app_context():
-            managed_file = self._selected_managed_file()
-            if not managed_file:
-                QMessageBox.warning(self, "Warning", "Select a managed file first.")
-                return
-        key_text, accepted = QInputDialog.getText(self, "HMAC-SHA1-LAB", "Key text:")
-        if not accepted:
-            return
-        digest = LabCryptoService.hmac_sha1_for_file(managed_file.original_path, key_text.encode("utf-8"))
-        self.status_label.setText(f"HMAC-SHA1-LAB for {managed_file.original_name}:\n{digest}")
-        QMessageBox.information(self, "HMAC-SHA1-LAB", digest)
-
-    def run_lab_base64_encode(self):
-        with app.app_context():
-            managed_file = self._selected_managed_file()
-            if not managed_file:
-                QMessageBox.warning(self, "Warning", "Select a managed file first.")
-                return
-        output_path = os.path.join(
-            os.path.dirname(managed_file.original_path),
-            f"{os.path.basename(managed_file.original_path)}.base64.txt",
-        )
-        LabCryptoService.base64_encode_file(managed_file.original_path, output_path)
-        self.status_label.setText(f"Base64-LAB encoded file created:\n{output_path}")
-        QMessageBox.information(self, "Base64 Encode", output_path)
-
-    def run_lab_base64_decode(self):
-        input_path, _ = QFileDialog.getOpenFileName(self, "Select Base64 File", "", "Text Files (*.txt);;All Files (*)")
-        if not input_path:
-            return
-        output_path = os.path.join(
-            os.path.dirname(input_path),
-            f"decoded_{os.path.splitext(os.path.basename(input_path))[0]}",
-        )
-        try:
-            LabCryptoService.base64_decode_file(input_path, output_path)
-        except Exception as exc:
-            QMessageBox.critical(self, "Base64 Decode Error", str(exc))
-            return
-        self.status_label.setText(f"Base64-LAB decoded file created:\n{output_path}")
-        QMessageBox.information(self, "Base64 Decode", output_path)
-
-    def run_lab_signature_demo(self):
-        message, accepted = QInputDialog.getText(self, "Digital Signature Demo", "Message to sign:")
-        if not accepted or not message:
-            return
-        signed_doc = LabCryptoService.create_signed_document(message, 3233, 17, 413)
-        certificate = LabCryptoService.issue_certificate("Lab User", 3233, 17)
-        verified = LabCryptoService.verify_signed_document(signed_doc, certificate)
-        status = "valid" if verified else "invalid"
-        self.status_label.setText(
-            f"Digital signature demo complete.\nMessage: {message}\nSignature: {signed_doc.s}\nVerification: {status}"
-        )
-        QMessageBox.information(
-            self,
-            "Digital Signature Demo",
-            f"Signature: {signed_doc.s}\nCertificate issuer: {certificate.issuer}\nVerification: {status}",
-        )
 
     def refresh_details(self):
         with app.app_context():

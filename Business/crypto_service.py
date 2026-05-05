@@ -26,14 +26,13 @@ from Repositories.performance_repo import PerformanceRepository
 
 class CryptoManagerService:
     SYMMETRIC_FRAMEWORK_MAP = {
-        "AES-256-CBC": {"OpenSSL", "Cryptography", "Custom Educational"},
+        "AES-256-CBC": {"OpenSSL", "Cryptography"},
+        "DES-CBC": {"OpenSSL"},
         "AES-256-GCM": {"Cryptography"},
-        "DES-CBC": {"OpenSSL", "Custom Educational"},
         "DES-LAB": {"Lab Educational"},
     }
     ASYMMETRIC_FRAMEWORK_MAP = {
         "RSA-2048": {"OpenSSL", "Cryptography"},
-        "Hybrid RSA-AES": {"Cryptography"},
         "RSA-LAB": {"Lab Educational"},
     }
 
@@ -61,14 +60,6 @@ class CryptoManagerService:
             raise CryptoServiceError(
                 f"Unsupported framework/algorithm combination: {framework.name} with {algorithm.name}."
             )
-        if algorithm.type == "hybrid":
-            if key_record.key_type not in {"keypair", "public", "private"}:
-                raise CryptoServiceError("Hybrid RSA-AES operations require an RSA key pair.")
-            if not key_record.is_active:
-                raise CryptoServiceError("Selected key is inactive.")
-            if framework and key_record.framework_id != framework.id:
-                raise CryptoServiceError("Selected RSA key does not belong to the selected framework.")
-            return
 
         if key_record.algorithm_id != algorithm.id:
             raise CryptoServiceError("Selected key does not belong to the selected algorithm.")
@@ -83,7 +74,7 @@ class CryptoManagerService:
         if algorithm.name == "RSA-LAB":
             LabCryptoService.parse_rsa_key_material(key_record)
             return
-        if operation_type == "decrypt" and algorithm.type in {"asymmetric", "hybrid"} and not key_record.private_key_value:
+        if operation_type == "decrypt" and algorithm.type == "asymmetric" and not key_record.private_key_value:
             raise CryptoServiceError("Decryption requires a private key.")
 
     @staticmethod
@@ -135,13 +126,13 @@ class CryptoManagerService:
                 metadata = CryptographyCryptoService.encrypt_aes_256_gcm(input_path, output_path, key_bytes)
             else:
                 raise CryptoServiceError(f"Unsupported Cryptography algorithm: {algorithm_name}")
-        elif framework_name == "Custom Educational":
+        elif framework_name in {"Custom Educational", "Custom Educational / Legacy"}:
             if algorithm_name == "AES-256-CBC":
                 CustomPythonService.encrypt_aes_256_cbc(input_path, output_path, key_bytes)
             elif algorithm_name == "DES-CBC":
                 CustomPythonService.encrypt_des_cbc(input_path, output_path, key_bytes)
             else:
-                raise CryptoServiceError(f"Unsupported Custom Educational algorithm: {algorithm_name}")
+                raise CryptoServiceError(f"Unsupported Custom Educational / Legacy algorithm: {algorithm_name}")
         elif framework_name == "Lab Educational":
             if algorithm_name == "DES-LAB":
                 LabCryptoService.encrypt_des_file(input_path, output_path, key_bytes)
@@ -176,13 +167,13 @@ class CryptoManagerService:
                 )
             else:
                 raise CryptoServiceError(f"Unsupported Cryptography algorithm: {algorithm_name}")
-        elif framework_name == "Custom Educational":
+        elif framework_name in {"Custom Educational", "Custom Educational / Legacy"}:
             if algorithm_name == "AES-256-CBC":
                 CustomPythonService.decrypt_aes_256_cbc(input_path, output_path, key_bytes)
             elif algorithm_name == "DES-CBC":
                 CustomPythonService.decrypt_des_cbc(input_path, output_path, key_bytes)
             else:
-                raise CryptoServiceError(f"Unsupported Custom Educational algorithm: {algorithm_name}")
+                raise CryptoServiceError(f"Unsupported Custom Educational / Legacy algorithm: {algorithm_name}")
         elif framework_name == "Lab Educational":
             if algorithm_name == "DES-LAB":
                 LabCryptoService.decrypt_des_file(input_path, output_path, key_bytes)
@@ -258,14 +249,6 @@ class CryptoManagerService:
                             sort_keys=True,
                         ),
                     }
-                elif algorithm.name == "Hybrid RSA-AES":
-                    if framework.name != "Cryptography":
-                        raise CryptoServiceError("Hybrid RSA-AES is currently supported with the Cryptography framework.")
-                    if not key_record.public_key_value:
-                        raise CryptoServiceError("Hybrid encryption requires a stored RSA public key.")
-                    metadata = CryptographyCryptoService.encrypt_hybrid_rsa_aes(
-                        managed_file.original_path, output_path, key_record.public_key_value
-                    )
                 else:
                     raise CryptoServiceError(f"Unsupported algorithm: {algorithm.name}")
 
@@ -342,21 +325,6 @@ class CryptoManagerService:
                             sort_keys=True,
                         ),
                     }
-                elif algorithm.name == "Hybrid RSA-AES":
-                    if framework.name != "Cryptography":
-                        raise CryptoServiceError("Hybrid RSA-AES is currently supported with the Cryptography framework.")
-                    if not source_operation:
-                        raise CryptoServiceError("Hybrid decryption requires stored encryption metadata.")
-                    metadata = CryptographyCryptoService.decrypt_hybrid_rsa_aes(
-                        managed_file.encrypted_path,
-                        output_path,
-                        key_record.private_key_value,
-                        source_operation.encrypted_data_key,
-                        source_operation.iv_nonce,
-                        source_operation.auth_tag,
-                    )
-                    metadata["encrypted_data_key"] = source_operation.encrypted_data_key
-                    metadata["key_wrap_algorithm"] = source_operation.key_wrap_algorithm
                 else:
                     raise CryptoServiceError(f"Unsupported algorithm: {algorithm.name}")
 

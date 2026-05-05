@@ -16,9 +16,9 @@ class FrameworkRepository:
     @staticmethod
     def get_by_name(name):
         framework = Framework.query.filter_by(name=name).first()
-        if framework or name != "Custom":
+        if framework or name not in {"Custom", "Custom Educational"}:
             return framework
-        return Framework.query.filter_by(name="Custom Educational").first()
+        return Framework.query.filter_by(name="Custom Educational / Legacy").first()
 
     @staticmethod
     def get_all():

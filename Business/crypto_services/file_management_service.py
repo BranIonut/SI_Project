@@ -22,12 +22,18 @@ class FileManagementService:
             None,
         )
         if existing:
+            reset_processed_fields = existing.original_hash != original_hash
             return FileRepository.update(
                 existing.id,
                 original_name=original_name,
                 original_path=target_path,
                 original_hash=original_hash,
-                status="plain",
+                status="plain" if reset_processed_fields else existing.status,
+                encrypted_path=None if reset_processed_fields else existing.encrypted_path,
+                encrypted_hash=None if reset_processed_fields else existing.encrypted_hash,
+                decrypted_path=None if reset_processed_fields else existing.decrypted_path,
+                decrypted_hash=None if reset_processed_fields else existing.decrypted_hash,
+                integrity_verified=None if reset_processed_fields else existing.integrity_verified,
             )
         return FileRepository.create(
             original_name=original_name,
