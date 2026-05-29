@@ -250,6 +250,7 @@ class CryptoManagerService:
     def encrypt_file(managed_file, algorithm, framework, key_record):
         CryptoManagerService.validate_combination(algorithm, key_record, OPERATION_ENCRYPT, framework)
         operation = CryptoManagerService._create_operation(managed_file, algorithm, framework, key_record, OPERATION_ENCRYPT)
+        operation_id = operation.id
         output_path = RuntimePaths.build_encrypted_output_path(managed_file, algorithm)
         try:
             with MetricCollector() as metrics:
@@ -292,18 +293,18 @@ class CryptoManagerService:
 
             CryptoManagerService._update_file_after_encryption(managed_file, output_path)
             CryptoManagerService._store_operation_metadata(
-                operation.id, metadata, notes=f"{algorithm.name} encryption completed."
+                operation_id, metadata, notes=f"{algorithm.name} encryption completed."
             )
-            performance = CryptoManagerService._save_performance(operation.id, metrics, managed_file.original_path, output_path)
+            performance = CryptoManagerService._save_performance(operation_id, metrics, managed_file.original_path, output_path)
             return OperationResult(
                 managed_file=FileRepository.get_by_id(managed_file.id),
-                operation=OperationRepository.get_by_id(operation.id),
+                operation=OperationRepository.get_by_id(operation_id),
                 performance=PerformanceRepository.get_by_id(performance.id),
                 output_path=output_path,
                 message="Encryption completed successfully.",
             )
         except Exception as exc:
-            CryptoManagerService._mark_operation_failed(managed_file, operation.id, exc)
+            CryptoManagerService._mark_operation_failed(managed_file, operation_id, exc)
             raise
 
     @staticmethod
@@ -312,6 +313,7 @@ class CryptoManagerService:
         if not managed_file.encrypted_path or not os.path.exists(managed_file.encrypted_path):
             raise CryptoServiceError("No encrypted file is registered for the selected record.")
         operation = CryptoManagerService._create_operation(managed_file, algorithm, framework, key_record, OPERATION_DECRYPT)
+        operation_id = operation.id
         output_path = RuntimePaths.build_decrypted_output_path(managed_file)
         try:
             source_operation = OperationRepository.get_latest_successful_encrypt_for_file(
@@ -358,22 +360,22 @@ class CryptoManagerService:
 
             _, notes, integrity_ok = CryptoManagerService._update_file_after_decryption(managed_file, output_path)
             CryptoManagerService._store_operation_metadata(
-                operation.id,
+                operation_id,
                 metadata,
                 notes=notes,
                 status=OperationStateResolver.completion_status(integrity_ok),
                 error_message=None if integrity_ok else "Decrypted hash does not match original hash.",
             )
-            performance = CryptoManagerService._save_performance(operation.id, metrics, managed_file.encrypted_path, output_path)
+            performance = CryptoManagerService._save_performance(operation_id, metrics, managed_file.encrypted_path, output_path)
             return OperationResult(
                 managed_file=FileRepository.get_by_id(managed_file.id),
-                operation=OperationRepository.get_by_id(operation.id),
+                operation=OperationRepository.get_by_id(operation_id),
                 performance=PerformanceRepository.get_by_id(performance.id),
                 output_path=output_path,
                 message=notes,
             )
         except Exception as exc:
-            CryptoManagerService._mark_operation_failed(managed_file, operation.id, exc)
+            CryptoManagerService._mark_operation_failed(managed_file, operation_id, exc)
             raise
 
     @staticmethod

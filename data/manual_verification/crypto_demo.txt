@@ -1,8 +1,4 @@
-AES cryptography roundtrip data
-AES cryptography roundtrip data
-AES cryptography roundtrip data
-AES cryptography roundtrip data
-AES cryptography roundtrip data
-AES cryptography roundtrip data
-AES cryptography roundtrip data
-AES cryptography roundtrip data
+Cryptography framework verification file.
+
+This text can be used with AES-256-CBC and AES-256-GCM.
+Expected result: encryption succeeds, decryption succeeds, and the decrypted SHA-256 hash matches the original hash.

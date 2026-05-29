@@ -13,6 +13,7 @@ data/encrypted/*
 data/decrypted/*
 data/keys/*
 data/test_tmp/
+data/manual_*/**
 
 !data/original/.gitkeep
 !data/encrypted/.gitkeep

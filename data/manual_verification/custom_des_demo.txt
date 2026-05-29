@@ -1,8 +1,4 @@
-Custom DES content
-Custom DES content
-Custom DES content
-Custom DES content
-Custom DES content
-Custom DES content
-Custom DES content
-Custom DES content
+Legacy custom DES verification file.
+
+Use this only if the legacy/custom educational framework is enabled in the local database.
+Expected result: DES encryption and decryption should preserve this exact content.

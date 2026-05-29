@@ -1,8 +1,4 @@
-DES educational content
-DES educational content
-DES educational content
-DES educational content
-DES educational content
-DES educational content
-DES educational content
-DES educational content
+OpenSSL DES verification file.
+
+Use this file with DES-CBC.
+Expected result: encryption succeeds, decryption succeeds, and integrity verification passes.

@@ -4,6 +4,7 @@ import shutil
 import uuid
 
 import pytest
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 from sqlalchemy import inspect
 
@@ -556,3 +557,49 @@ def test_main_ui_hides_demo_lab_box_and_shows_integrated_frameworks(qt_app):
     assert not any("Hybrid RSA-AES" in item for item in algorithm_items)
     assert not any("BASE64-LAB" in item or "HMAC-SHA1-LAB" in item or "DIGITAL-SIGNATURE-LAB" in item for item in algorithm_items)
     window.close()
+
+
+def test_main_ui_encrypt_path_does_not_access_detached_records(qt_app, sandbox_dir, monkeypatch):
+    input_path = write_sample_file(sandbox_dir, "ui_encrypt.txt", b"UI encrypt smoke test")
+
+    def noop_message(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr("Presenter.kms_window.QMessageBox.information", noop_message)
+
+    with app.app_context():
+        FileManagementService.register_file(input_path)
+        framework = FrameworkRepository.get_by_name("OpenSSL")
+        algorithm = AlgorithmRepository.get_by_name("AES-256-CBC")
+        key_record = KeyManagementService.generate_key(unique_name("ui_aes"), algorithm, framework)
+        framework_id = framework.id
+        key_id = key_record.id
+
+    window = KMSWindow()
+    try:
+        file_index = window.combo_files.findText("ui_encrypt.txt", Qt.MatchFlag.MatchContains)
+        algorithm_index = window.combo_alg.findText("AES-256-CBC", Qt.MatchFlag.MatchContains)
+
+        assert file_index >= 0
+        assert algorithm_index >= 0
+
+        window.combo_files.setCurrentIndex(file_index)
+        window.combo_alg.setCurrentIndex(algorithm_index)
+
+        framework_index = window.combo_fw.findData(framework_id)
+        assert framework_index >= 0
+        window.combo_fw.setCurrentIndex(framework_index)
+        window.load_keys()
+
+        key_index = window.combo_key.findData(key_id)
+        assert key_index >= 0
+        window.combo_key.setCurrentIndex(key_index)
+
+        window.encrypt_file()
+
+        with app.app_context():
+            refreshed = FileRepository.get_by_id(window.combo_files.currentData())
+        assert refreshed.status == "encrypted"
+        assert "Encryption completed successfully" in window.status_label.text()
+    finally:
+        window.close()

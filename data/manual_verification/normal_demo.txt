@@ -1,10 +1,4 @@
-AES normal file content for openssl roundtrip
-AES normal file content for openssl roundtrip
-AES normal file content for openssl roundtrip
-AES normal file content for openssl roundtrip
-AES normal file content for openssl roundtrip
-AES normal file content for openssl roundtrip
-AES normal file content for openssl roundtrip
-AES normal file content for openssl roundtrip
-AES normal file content for openssl roundtrip
-AES normal file content for openssl roundtrip
+General manual verification file.
+
+Use this with symmetric algorithms such as AES-256-CBC, AES-256-GCM, DES-CBC, or DES-LAB.
+Expected result: the decrypted file should match this original content byte for byte.

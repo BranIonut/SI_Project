@@ -1,8 +1,8 @@
-AES normal content for verification
-AES normal content for verification
-AES normal content for verification
-AES normal content for verification
-AES normal content for verification
-AES normal content for verification
-AES normal content for verification
-AES normal content for verification
+OpenSSL AES verification file.
+
+Use this file with AES-256-CBC.
+Expected result: encryption succeeds, decryption succeeds, and integrity verification passes.
+
+Line 1: AES test payload.
+Line 2: repeated content for a non-empty file.
+Line 3: final line for hash comparison.

@@ -1,8 +1,4 @@
-Custom AES content
-Custom AES content
-Custom AES content
-Custom AES content
-Custom AES content
-Custom AES content
-Custom AES content
-Custom AES content
+Legacy custom AES verification file.
+
+Use this only if the legacy/custom educational framework is enabled in the local database.
+Expected result: AES encryption and decryption should preserve this exact content.

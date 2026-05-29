@@ -998,6 +998,9 @@ class KMSWindow(QWidget):
                 framework = FrameworkRepository.get_by_id(framework_id)
                 key_record = KeyRepository.get_by_id(key_id)
 
+                if not managed_file or not algorithm or not framework or not key_record:
+                    raise CryptoServiceError("Selected file, algorithm, framework or key no longer exists.")
+
                 if operation_type == "encrypt":
                     result = CryptoManagerService.encrypt_file(
                         managed_file,
@@ -1013,6 +1016,23 @@ class KMSWindow(QWidget):
                         key_record,
                     )
 
+                integrity_status = (
+                    "Verified"
+                    if result.managed_file.integrity_verified is True
+                    else "Pending"
+                    if result.managed_file.integrity_verified is None
+                    else "Mismatch"
+                )
+                performance_summary = CryptoManagerService.format_performance_summary(result.performance)
+                operation_summary = {
+                    "message": result.message,
+                    "framework_name": framework.display_name or framework.name,
+                    "algorithm_name": algorithm.name,
+                    "output_path": result.output_path,
+                    "integrity_status": integrity_status,
+                    "performance_summary": performance_summary,
+                }
+
         except CryptoServiceError as exc:
             QMessageBox.critical(self, "Crypto Error", str(exc))
             self.status_label.setText(f"{operation_type.title()} failed:\n{exc}")
@@ -1025,35 +1045,25 @@ class KMSWindow(QWidget):
             self.load_data()
             return
 
-        performance = result.performance
-        integrity_status = (
-            "Verified"
-            if result.managed_file.integrity_verified is True
-            else "Pending"
-            if result.managed_file.integrity_verified is None
-            else "Mismatch"
-        )
-        performance_summary = CryptoManagerService.format_performance_summary(performance)
-
         self.status_label.setText(
-            f"{result.message}\n\n"
-            f"Framework: {framework.display_name or framework.name}\n"
-            f"Algorithm: {algorithm.name}\n"
-            f"Output: {result.output_path}\n"
-            f"Integrity: {integrity_status}\n"
-            f"{performance_summary}"
+            f"{operation_summary['message']}\n\n"
+            f"Framework: {operation_summary['framework_name']}\n"
+            f"Algorithm: {operation_summary['algorithm_name']}\n"
+            f"Output: {operation_summary['output_path']}\n"
+            f"Integrity: {operation_summary['integrity_status']}\n"
+            f"{operation_summary['performance_summary']}"
         )
 
         QMessageBox.information(
             self,
             "Operation Complete",
             (
-                f"{result.message}\n\n"
-                f"Framework: {framework.display_name or framework.name}\n"
-                f"Algorithm: {algorithm.name}\n\n"
-                f"Output path:\n{result.output_path}\n\n"
-                f"Integrity: {integrity_status}\n\n"
-                f"{performance_summary}"
+                f"{operation_summary['message']}\n\n"
+                f"Framework: {operation_summary['framework_name']}\n"
+                f"Algorithm: {operation_summary['algorithm_name']}\n\n"
+                f"Output path:\n{operation_summary['output_path']}\n\n"
+                f"Integrity: {operation_summary['integrity_status']}\n\n"
+                f"{operation_summary['performance_summary']}"
             ),
         )
 

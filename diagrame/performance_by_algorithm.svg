@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="222" viewBox="0 0 720 222">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<text x="20" y="34" font-family="Segoe UI, Arial, sans-serif" font-size="20" font-weight="700" fill="#111827">Timp mediu pe algoritm</text>
+<text x="20" y="76" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#374151">DES-LAB</text>
+<rect x="190" y="62" width="420.0" height="16" rx="2" fill="#16a34a"/>
+<text x="622" y="76" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#374151">131.22 ms</text>
+<text x="20" y="110" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#374151">RSA-2048</text>
+<rect x="190" y="96" width="95.8" height="16" rx="2" fill="#16a34a"/>
+<text x="622" y="110" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#374151">29.93 ms</text>
+<text x="20" y="144" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#374151">AES-256-CBC</text>
+<rect x="190" y="130" width="89.5" height="16" rx="2" fill="#16a34a"/>
+<text x="622" y="144" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#374151">27.98 ms</text>
+<text x="20" y="178" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#374151">AES-256-GCM</text>
+<rect x="190" y="164" width="12.2" height="16" rx="2" fill="#16a34a"/>
+<text x="622" y="178" font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#374151">3.82 ms</text>
+</svg>
